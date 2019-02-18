@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -638,10 +639,24 @@ func installPackage(pkg string, pacconfer config.PackagingConfigurer, pacman man
 
 func installMongod(operatingsystem string, numaCtl bool) error {
 	if featureflag.Enabled(feature.MongoDbSnap) {
+		snapName := ServiceName
+
+		// If we're installing a local snap, then update provide
+		// an absolute path. snap install will then do the Right Thing (TM).
+		files, err := ioutil.ReadDir("/var/lib/juju/snap")
+		if err == nil {
+			for _, fullFileName := range files {
+				_, fileName := path.Split(fullFileName.Name())
+				if strings.HasPrefix(fileName, snapName) && path.Ext(fileName) == ".snap" {
+					snapName = fullFileName.Name()
+				}
+			}
+		}
+
 		prerequisites := []snap.App{snap.NewApp("core")}
 		backgroundServices := []snap.BackgroundService{{"daemon", true}}
 		conf := common.Conf{Desc: ServiceName + " snap"}
-		service, err := snap.NewService(ServiceName, conf, snap.Command, "edge", "jailmode", backgroundServices, prerequisites)
+		service, err := snap.NewService(snapName, ServiceName, conf, snap.Command, "edge", "jailmode", backgroundServices, prerequisites)
 		if err != nil {
 			return errors.Trace(err)
 		}

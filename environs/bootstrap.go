@@ -61,6 +61,14 @@ type BootstrapParams struct {
 	// that rely on it for selecting images. This will be empty for
 	// providers that do not implements simplestreams.HasRegion.
 	ImageMetadata []*imagemetadata.ImageMetadata
+
+	// JujuDbSnapPath is the path to a local .snap file that will be used
+	// to run the juju-db service.
+	JujuDbSnapPath string
+
+	// JujuDbSnapAssertionsPath is the path to a local .assertfile that
+	// will be used to test the contents of the .snap at JujuDbSnap.
+	JujuDbSnapAssertionsPath string
 }
 
 // CloudBootstrapFinalizer is a function returned from Environ.Bootstrap.

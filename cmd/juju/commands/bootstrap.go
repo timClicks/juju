@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -152,21 +153,23 @@ func newBootstrapCommand() cmd.Command {
 type bootstrapCommand struct {
 	modelcmd.ModelCommandBase
 
-	Constraints             constraints.Value
-	ConstraintsStr          string
-	BootstrapConstraints    constraints.Value
-	BootstrapConstraintsStr string
-	BootstrapSeries         string
-	BootstrapImage          string
-	BuildAgent              bool
-	MetadataSource          string
-	Placement               string
-	KeepBrokenEnvironment   bool
-	AutoUpgrade             bool
-	AgentVersionParam       string
-	AgentVersion            *version.Number
-	config                  common.ConfigFlag
-	modelDefaults           common.ConfigFlag
+	Constraints              constraints.Value
+	ConstraintsStr           string
+	BootstrapConstraints     constraints.Value
+	BootstrapConstraintsStr  string
+	BootstrapSeries          string
+	BootstrapImage           string
+	BuildAgent               bool
+	JujuDbSnapPath           string
+	JujuDbSnapAssertionsPath string
+	MetadataSource           string
+	Placement                string
+	KeepBrokenEnvironment    bool
+	AutoUpgrade              bool
+	AgentVersionParam        string
+	AgentVersion             *version.Number
+	config                   common.ConfigFlag
+	modelDefaults            common.ConfigFlag
 
 	showClouds          bool
 	showRegionsForCloud string
@@ -198,6 +201,10 @@ func (c *bootstrapCommand) SetFlags(f *gnuflag.FlagSet) {
 		f.StringVar(&c.BootstrapImage, "bootstrap-image", "", "Specify the image of the bootstrap machine")
 	}
 	f.BoolVar(&c.BuildAgent, "build-agent", false, "Build local version of agent binary before bootstrapping")
+	if featureflag.Enabled(feature.MongoDbSnap) {
+		f.StringVar(&c.JujuDbSnapPath, "juju-db-snap", "", "Path to a locally built .snap to use as the internal juju-db service.")
+		f.StringVar(&c.JujuDbSnapAssertionsPath, "juju-db-snap-assertions", "", "Path to a local .assert file. Requires --juju-db-snap")
+	}
 	f.StringVar(&c.MetadataSource, "metadata-source", "", "Local path to use as agent and/or image metadata source")
 	f.StringVar(&c.Placement, "to", "", "Placement directive indicating an instance to bootstrap")
 	f.BoolVar(&c.KeepBrokenEnvironment, "keep-broken", false, "Do not destroy the model if bootstrap fails")
@@ -215,6 +222,29 @@ func (c *bootstrapCommand) SetFlags(f *gnuflag.FlagSet) {
 }
 
 func (c *bootstrapCommand) Init(args []string) (err error) {
+	if c.JujuDbSnapPath != "" {
+		f, err := os.Open(c.JujuDbSnapPath)
+		defer f.Close()
+		if err != nil {
+			return errors.Annotatef(err, "--juju-db-snap file unable to be opened")
+		}
+	}
+
+	// fill in JujuDbSnapAssertionsPath from the same directory as JujuDbSnapPath
+	if (c.JujuDbSnapAssertionsPath == "") && (c.JujuDbSnapPath != "") {
+		assertionsPath := strings.Replace(c.JujuDbSnapPath, path.Ext(c.JujuDbSnapPath), ".assert", -1)
+		f, err := os.Open(assertionsPath)
+		defer f.Close()
+		if err != nil {
+			return errors.Annotatef(err, "unable to detect .assert file at %v. Please specify its path with --juju-db-snap-assertions.", assertionsPath)
+		}
+		c.JujuDbSnapAssertionsPath = assertionsPath
+	}
+
+	if c.JujuDbSnapAssertionsPath != "" && c.JujuDbSnapPath == "" {
+		return errors.New("--juju-db-snap-assertions requires --juju-db-snap")
+	}
+
 	if c.showClouds && c.showRegionsForCloud != "" {
 		return errors.New("--clouds and --regions can't be used together")
 	}
@@ -500,6 +530,9 @@ func (c *bootstrapCommand) Run(ctx *cmd.Context) (resultErr error) {
 		CredentialName: credentials.name,
 		AdminSecret:    config.bootstrap.AdminSecret,
 	}
+
+	logger.Criticalf("c.JujuDbSnapPath:           %v", c.JujuDbSnapPath)
+	logger.Criticalf("c.JujuDbSnapAssertionsPath: %v", c.JujuDbSnapAssertionsPath)
 	bootstrapParams := bootstrap.BootstrapParams{
 		BootstrapSeries:           c.BootstrapSeries,
 		BootstrapImage:            c.BootstrapImage,
@@ -514,12 +547,16 @@ func (c *bootstrapCommand) Run(ctx *cmd.Context) (resultErr error) {
 		RegionInheritedConfig:     cloud.RegionConfig,
 		AdminSecret:               config.bootstrap.AdminSecret,
 		CAPrivateKey:              config.bootstrap.CAPrivateKey,
+		JujuDbSnapPath:            c.JujuDbSnapPath,
+		JujuDbSnapAssertionsPath:  c.JujuDbSnapAssertionsPath,
 		DialOpts: environs.BootstrapDialOpts{
 			Timeout:        config.bootstrap.BootstrapTimeout,
 			RetryDelay:     config.bootstrap.BootstrapRetryDelay,
 			AddressesDelay: config.bootstrap.BootstrapAddressesDelay,
 		},
 	}
+	logger.Criticalf("bootstrapParams.JujuDbSnapPath:           %v", bootstrapParams.JujuDbSnapPath)
+	logger.Criticalf("bootstrapParams.JujuDbSnapAssertionsPath: %v", bootstrapParams.JujuDbSnapAssertionsPath)
 
 	environ, err := bootstrapPrepareController(
 		isCAASController, bootstrapCtx, store, bootstrapPrepareParams,

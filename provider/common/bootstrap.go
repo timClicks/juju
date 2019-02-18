@@ -77,6 +77,7 @@ func BootstrapInstance(
 	callCtx context.ProviderCallContext,
 	args environs.BootstrapParams,
 ) (_ *environs.StartInstanceResult, selectedSeries string, _ environs.CloudBootstrapFinalizer, err error) {
+
 	// TODO make safe in the case of racing Bootstraps
 	// If two Bootstraps are called concurrently, there's
 	// no way to make sure that only one succeeds.
@@ -350,6 +351,7 @@ var FinishBootstrap = func(
 	}
 	defer cleanup()
 
+	logger.Criticalf("instanceConfig.Bootstrap.JujuDbSnapPath %v", instanceConfig.Bootstrap.JujuDbSnapPath)
 	return ConfigureMachine(ctx, client, addr, instanceConfig, sshOptions)
 }
 
@@ -382,6 +384,8 @@ func ConfigureMachine(
 	instanceConfig *instancecfg.InstanceConfig,
 	sshOptions *ssh.Options,
 ) error {
+	logger.Criticalf("instanceConfig.Bootstrap.JujuDbSnapPath %v", instanceConfig.Bootstrap.JujuDbSnapPath)
+
 	// Bootstrap is synchronous, and will spawn a subprocess
 	// to complete the procedure. If the user hits Ctrl-C,
 	// SIGINT is sent to the foreground process attached to

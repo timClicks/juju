@@ -198,6 +198,7 @@ func ListServices() ([]string, error) {
 
 // Service is a type for services that are being managed by snapd as snaps.
 type Service struct {
+	name           string
 	scriptRenderer shell.Renderer
 	executable     string
 	app            App
@@ -206,9 +207,9 @@ type Service struct {
 
 // NewService returns a new Service defined by `conf`, with
 // the name `name`. If no BackgroundServices are provided, manage all of the snap's background services together.
-func NewService(name string, conf common.Conf, snapPath string, Channel string, ConfinementPolicy string, backgroundServices []BackgroundService, prerequisites []App) (Service, error) {
+func NewService(mainSnap string, serviceName string, conf common.Conf, snapPath string, Channel string, ConfinementPolicy string, backgroundServices []BackgroundService, prerequisites []App) (Service, error) {
 	app := App{
-		Name:               name,
+		Name:               mainSnap,
 		ConfinementPolicy:  ConfinementPolicy,
 		Channel:            Channel,
 		BackgroundServices: backgroundServices,
@@ -220,6 +221,7 @@ func NewService(name string, conf common.Conf, snapPath string, Channel string, 
 	}
 
 	svc := Service{
+		name:           serviceName,
 		scriptRenderer: &shell.BashRenderer{},
 		executable:     snapPath,
 		app:            app,
@@ -248,7 +250,7 @@ func NewServiceFromName(name string, conf common.Conf) (Service, error) {
 	Channel := defaultChannel
 	ConfinementPolicy := defaultConfinementPolicy
 
-	return NewService(name, conf, Command, Channel, ConfinementPolicy, BackgroundServices, Prerequisites)
+	return NewService(name, name, conf, Command, Channel, ConfinementPolicy, BackgroundServices, Prerequisites)
 
 }
 
@@ -283,6 +285,9 @@ func (s Service) Validate() error {
 //
 // Name is part of the service.Service interface
 func (s Service) Name() string {
+	if s.name != "" {
+		return s.name
+	}
 	return s.app.Name
 }
 
