@@ -20,7 +20,7 @@ func (c *charmstoreClientShim) WithChannel(channel params.Channel) CharmstoreFor
 }
 
 type fakeCharmstoreClientShim struct {
-	*jjcharmstore.ChannelAwareFakeClient
+	jjcharmstore.ChannelAwareFakeClient
 }
 
 func (c fakeCharmstoreClientShim) WithChannel(channel params.Channel) CharmstoreForDeploy {
