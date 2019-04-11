@@ -6,9 +6,6 @@ package application
 import (
 	"github.com/juju/cmd"
 	"github.com/juju/errors"
-	"github.com/juju/romulus"
-	"gopkg.in/juju/charmrepo.v3"
-
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/api/annotations"
 	"github.com/juju/juju/api/application"
@@ -19,6 +16,8 @@ import (
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/jujuclient"
 	"github.com/juju/juju/resource/resourceadapters"
+	"github.com/juju/romulus"
+	"gopkg.in/juju/charmrepo.v3"
 )
 
 // NewDeployCommandForTest returns a command to deploy applications intended to be used only in tests.
@@ -67,10 +66,45 @@ func NewDeployCommandForTest(newAPIRoot func() (DeployAPI, error), steps []Deplo
 	return modelcmd.Wrap(deployCmd)
 }
 
+//type CharmAdder interface {
+//	AddLocalCharm(*charm.URL, charm.Charm, bool) (*charm.URL, error)
+//	AddCharm(*charm.URL, params.Channel, bool) error
+//	AddCharmWithAuthorization(*charm.URL, params.Channel, *macaroon.Macaroon, bool) error
+//	AuthorizeCharmstoreEntity(*charm.URL) (*macaroon.Macaroon, error)
+//}
+
+// noopCharmAdder for the purposes of testing the deploy command,
+// we'll assume that charms/bundles are added
+type noopCharmAdder struct {
+	*deployAPIAdapter
+}
+
+//func (c *noopCharmAdder) AddCharm(id *charm.URL, channel params.Channel, force bool) error {
+//	logger.Infof("AddCharm(id: %v, ... (arg ... what should we do!!?))", id)
+//	return nil
+//}
+//
+//func (c *noopCharmAdder) AddLocalCharm(id *charm.URL, charmData charm.Charm, force bool) (*charm.URL, error) {
+//	logger.Infof("AddLocalCharm(id: %v, ...)", id)
+//	return id, nil
+//}
+//
+//func (c *noopCharmAdder) AddCharmWithAuthorization(id *charm.URL, channel params.Channel, auth *macaroon.Macaroon,force bool) error {
+//	logger.Infof("AddCharmWithAuthorization(id: %v, channel: %s)", id, channel)
+//	return nil
+//}
+//
+//func (c *noopCharmAdder) AuthorizeCharmstoreEntity(id *charm.URL) (*macaroon.Macaroon, error) {
+//	logger.Infof("AuthorizeCharmstoreEntity(id: %v)")
+//	return (*macaroon.Macaroon)(nil), nil
+//}
+
+
 // NewDeployCommandForTest2 returns a command to deploy applications intended to be used only in tests
 // that do not use gomock.
 func NewDeployCommandForTest2(charmstore charmstoreForDeploy, charmrepo *charmstore.Repository) modelcmd.ModelCommand {
 	deployCmd := &DeployCommand{
+		// TOOD (tsm) allow []DeployStep to be a (varargs?) parameter
 		Steps: []DeployStep{
 			&RegisterMeteredCharm{
 				PlanURL:      romulus.DefaultAPIRoot,
@@ -104,7 +138,15 @@ func NewDeployCommandForTest2(charmstore charmstoreForDeploy, charmrepo *charmst
 		}
 		charmstore := charmstore.WithChannel(deployCmd.Channel)
 
-		return &deployAPIAdapter{
+		// ch := testcharms.Repo.CharmArchive("/tmp", "nope")
+		// curl := charm.MustParseURL(
+		// 	fmt.Sprintf("local:quantal/%s-%d", ch.Meta().Name, ch.Revision()),
+		// )
+		// api.AddCharm(info)
+		// api.State().AddCharm(info)
+		//}
+
+		deployAdapter := &deployAPIAdapter{
 			Connection:        apiRoot,
 			apiClient:         &apiClient{Client: apiRoot.Client()},
 			charmsClient:      &charmsClient{Client: apicharms.NewClient(apiRoot)},
@@ -114,7 +156,8 @@ func NewDeployCommandForTest2(charmstore charmstoreForDeploy, charmrepo *charmst
 			annotationsClient: &annotationsClient{Client: annotations.NewClient(apiRoot)},
 			charmRepoClient:   &charmRepoClient{charmrepo},
 			plansClient:       &plansClient{planURL: mURL},
-		}, nil
+		}
+		return &noopCharmAdder{deployAdapter}, nil
 	}
 
 	return modelcmd.Wrap(deployCmd)

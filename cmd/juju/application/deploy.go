@@ -215,7 +215,11 @@ func (a *deployAPIAdapter) Resolve(cfg *config.Config, url *charm.URL) (
 	[]string,
 	error,
 ) {
-	return resolveCharm(a.charmRepoClient.ResolveWithChannel, url)
+	resolvedId, resolvedChannel, supportedSeries, err := resolveCharm(a.charmRepoClient.ResolveWithChannel, url)
+	if err != nil {
+		return nil, params.NoChannel, nil, errors.Annotatef(err, "resolving %v", url)
+	}
+	return resolvedId, resolvedChannel, supportedSeries, err
 }
 
 func (a *deployAPIAdapter) Get(url *charm.URL) (charm.Charm, error) {

@@ -240,7 +240,7 @@ func makeBundleHandler(
 	for name := range data.Applications {
 		applications.Add(name)
 	}
-	return &bundleHandler{
+	handler := &bundleHandler{
 		dryRun:        dryRun,
 		bundleDir:     bundleDir,
 		applications:  applications,
@@ -256,6 +256,7 @@ func makeBundleHandler(
 		macaroons:     make(map[*charm.URL]*macaroon.Macaroon),
 		channels:      make(map[*charm.URL]csparams.Channel),
 	}
+	return handler
 }
 
 func (h *bundleHandler) makeModel(

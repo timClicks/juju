@@ -347,9 +347,10 @@ func NewRepository() *Repository {
 	return &repo
 }
 
-func (r *Repository) addRevision(ref *charm.URL) *charm.URL {
-	revision := r.revisions[r.channel][*ref]
-	return ref.WithRevision(revision)
+func (r *Repository) addRevision(id *charm.URL) *charm.URL {
+	logger.Infof("finding revision for %v", id)
+	revision := r.revisions[r.channel][*id.WithRevision(0)]
+	return id.WithRevision(revision)
 }
 
 // AddCharm registers a charm's availability on a particular channel,
@@ -436,23 +437,31 @@ func (r Repository) ResolveWithChannel(ref *charm.URL) (*charm.URL, params.Chann
 //
 // Part of the charmrepo.Interface
 func (r Repository) Get(id *charm.URL) (charm.Charm, error) {
-	withRevision := r.addRevision(id)
-	charmData := r.charms[r.channel][*withRevision]
-	if charmData == nil {
-		return charmData, errors.NotFoundf("cannot retrieve \"%v\": charm", id.String())
+	logger.Infof("GETTING CHARM %#v", id)
+	id = r.addRevision(id)
+
+	for charmId, charmData := range r.charms[r.channel] {
+		if charmId.Name == id.Name && charmId.Revision == id.Revision {
+			return charmData, nil
+		}
 	}
-	return charmData, nil
+	logger.Debugf("charms available %#v", r.charms)
+	return nil, errors.NotFoundf(id.String())
 }
 
 // GetBundle retrieves a bundle from the repository.
 //
 // Part of the charmrepo.Interface
 func (r Repository) GetBundle(id *charm.URL) (charm.Bundle, error) {
-	bundleData := r.bundles[r.channel][*id]
-	if bundleData == nil {
-		return nil, errors.NotFoundf(id.String())
+	logger.Debugf("GetBundle(%v)", id)
+	withRevision := r.addRevision(id)
+	for bundleId, bundle := range r.bundles[r.channel] {
+		if bundleId.Name == id.Name && bundleId.Revision == withRevision.Revision {
+			return bundle, nil
+		}
 	}
-	return bundleData, nil
+	logger.Debugf("bundles available %#v", r.bundles)
+	return nil, errors.NotFoundf(id.String())
 }
 
 // ListResources returns Resource metadata for resources that have been
@@ -478,26 +487,33 @@ func (r Repository) ListResources(id *charm.URL) ([]params.Resource, error) {
 // the new revision, which will be 0 for the first revision or
 // current revision in the store, plus 1.
 func (r Repository) UploadCharm(id *charm.URL, charmData charm.Charm) (*charm.URL, error) {
-	if len(r.charms[r.channel]) == 0 {
-		r.charms[r.channel] = make(map[charm.URL]charm.Charm)
+	logger.Infof("UPLOADING CHARM %+v", id)
+	blankId := id.WithRevision(0)
+	promulgatedRevision := r.revisions[r.channel][*blankId]
+	if promulgatedRevision > 0 {
+		promulgatedRevision = promulgatedRevision + 1
 	}
-	withRevision := r.addRevision(id)
-	r.charms[r.channel][*withRevision] = charmData
-	return withRevision, nil
+	id = id.WithRevision(promulgatedRevision)
+	return id, r.UploadCharmWithRevision(id, charmData, promulgatedRevision)
 }
 
 // UploadCharmWithRevision takes a charm's formal identifier (its URL)
 // and its contents and a revision number, then uploads it into the
 // store for clients to download.
 func (r Repository) UploadCharmWithRevision(id *charm.URL, charmData charm.Charm, promulgatedRevision int) error {
+	logger.Infof("UPLOADING CHARM %+v (w/ revision %d)", id, promulgatedRevision)
+	if len(r.charms[r.channel]) == 0 {
+		r.charms[r.channel] = make(map[charm.URL]charm.Charm)
+	}
 	if len(r.revisions[r.channel]) == 0 {
 		r.revisions[r.channel] = make(map[charm.URL]int)
 	}
-	r.revisions[r.channel][*id] = promulgatedRevision
-	_, err := r.UploadCharm(id, charmData)
-	if err != nil {
-		return errors.Trace(err)
+	if promulgatedRevision < 0 {
+		promulgatedRevision = 0
 	}
+	blankId := id.WithRevision(0)
+	r.revisions[r.channel][*blankId] = promulgatedRevision
+	r.charms[r.channel][*id.WithRevision(promulgatedRevision)] = charmData
 	return nil
 }
 
@@ -509,8 +525,10 @@ func (r Repository) UploadCharmWithRevision(id *charm.URL, charmData charm.Charm
 // the new revision, which will be 0 for the first revision or
 // current revision in the store, plus 1.
 func (r Repository) UploadBundle(id *charm.URL, bundleData charm.Bundle) (*charm.URL, error) {
-	r.bundles[r.channel][*id] = bundleData
-	return id, nil
+	logger.Infof("UPLOADING BUNDLE %+v", id)
+	withRevision := r.addRevision(id)
+	r.bundles[r.channel][*withRevision] = bundleData
+	return withRevision, nil
 }
 
 // UploadBundleWithRevision takes a bundle's formal identifier (its URL)

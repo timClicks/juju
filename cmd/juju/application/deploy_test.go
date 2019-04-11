@@ -1021,6 +1021,42 @@ func (s *charmstoreSuite) assertDeployedApplicationBindings(c *gc.C, info map[st
 	}
 }
 
+// assertUnitsCreated checks that the given units have been created. The
+// expectedUnits argument maps unit names to machine names.
+func (s *charmstoreSuite) assertUnitsCreated(c *gc.C, expectedUnits map[string]string) {
+	machines, err := s.State.AllMachines()
+	c.Assert(err, jc.ErrorIsNil)
+	created := make(map[string]string)
+	for _, m := range machines {
+		id := m.Id()
+		units, err := s.State.UnitsFor(id)
+		c.Assert(err, jc.ErrorIsNil)
+		for _, u := range units {
+			created[u.Name()] = id
+		}
+	}
+	c.Assert(created, jc.DeepEquals, expectedUnits)
+}
+
+// assertRelationsEstablished checks that the given relations have been set.
+func (s *charmstoreSuite) assertRelationsEstablished(c *gc.C, relations ...string) {
+	rs, err := s.State.AllRelations()
+	c.Assert(err, jc.ErrorIsNil)
+	established := make([]string, len(rs))
+	for i, r := range rs {
+		established[i] = r.String()
+	}
+	c.Assert(established, jc.SameContents, relations)
+}
+
+func (s *charmstoreSuite) combinedSettings(ch charm.Charm, inSettings charm.Settings) charm.Settings {
+	result := ch.Config().DefaultSettings()
+	for name, value := range inSettings {
+		result[name] = value
+	}
+	return result
+}
+
 func (s *charmstoreSuite) runDeployWithOutput(c *gc.C, args ...string) (string, string, error) {
 	ctx, err := cmdtesting.RunCommand(c, NewDeployCommandForTest2(s.charmstore, s.charmrepo), args...)
 	return strings.Trim(cmdtesting.Stdout(ctx), "\n"),
@@ -1095,18 +1131,28 @@ var deployAuthorizationTests = []struct {
 
 func (s *DeployCharmStoreSuite) TestDeployAuthorization(c *gc.C) {
 	// Upload the two charms required to upload the bundle.
+	//s.Factory.MakeCharm(c, &factory.CharmParams{Name: "mysql", Series: "trusty", Revision: "0"})
+	//s.Factory.MakeCharm(c, &factory.CharmParams{Name: "wordpress", Series: "trusty", Revision: "0"})
+	//s.Factory.MakeCharm(c, &factory.CharmParams{Name: "wordpress", Series: "trusty", Revision: "1"})
 	testcharms.UploadCharm(c, s.client, "trusty/mysql-0", "mysql")
 	testcharms.UploadCharm(c, s.client, "trusty/wordpress-1", "wordpress")
 
 	// Run the tests.
 	for i, test := range deployAuthorizationTests {
-		c.Logf("test %d: %s", i, test.about)
+		c.Logf("test %d: %s for %+v", i, test.about, test.uploadURL)
 
 		// Upload the charm or bundle under test.
 		url := charm.MustParseURL(test.uploadURL)
 		if url.Series == "bundle" {
 			url, _ = testcharms.UploadBundle(c, s.client, test.uploadURL, "wordpress-simple")
 		} else {
+			deployURL := charm.MustParseURL(test.deployURL)
+			if deployURL.Revision == -1 {
+				deployURL.Revision = 0
+			}
+			logger.Infof("adding %+v", deployURL)
+
+			//s.Factory.MakeCharm(c, &factory.CharmParams{URL: deployURL.String()})
 			url, _ = testcharms.UploadCharm(c, s.client, test.uploadURL, "wordpress")
 		}
 
@@ -1118,6 +1164,14 @@ func (s *DeployCharmStoreSuite) TestDeployAuthorization(c *gc.C) {
 		if test.expectError != "" {
 			c.Check(err, gc.ErrorMatches, test.expectError)
 			continue
+		}
+		if err != nil {
+			allCharms, _ := s.State.AllCharms()
+			logger.Errorf("all charms")
+			for _,charmInfo := range allCharms {
+				logger.Errorf(" - %#v", *charmInfo.URL())
+			}
+			logger.Errorf("charmrepo state\n%#v", s.charmrepo)
 		}
 		c.Assert(err, jc.ErrorIsNil)
 	}

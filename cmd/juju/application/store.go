@@ -7,14 +7,13 @@
 package application
 
 import (
-	"net/url"
-
 	"github.com/juju/errors"
 	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/charmrepo.v3/csclient"
 	csparams "gopkg.in/juju/charmrepo.v3/csclient/params"
 	"gopkg.in/macaroon-bakery.v2-unstable/httpbakery"
 	"gopkg.in/macaroon.v2-unstable"
+	"net/url"
 
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/cmd/juju/common"
