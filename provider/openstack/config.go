@@ -162,7 +162,7 @@ func (p EnvironProvider) Validate(cfg, old *config.Config) (valid *config.Config
 			"Config attribute %q (%v) is deprecated and ignored.\n"+
 				"Your cloud provider should have set up image metadata to provide the correct image id\n"+
 				"for your chosen series and architecture. If this is a private Openstack deployment without\n"+
-				"existing image metadata, please run 'juju-metadata help' to see how suitable image"+
+				"existing image metadata, please run 'juju metadata help generate-image' to see how suitable image"+
 				"metadata can be generated.",
 			"default-image-id", defaultImageId)
 		logger.Warningf(msg)
