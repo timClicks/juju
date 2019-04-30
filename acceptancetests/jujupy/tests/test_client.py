@@ -1188,7 +1188,7 @@ class TestModelClient(ClientTest):
         client = fake_juju_client()
         condition = client.make_remove_machine_condition('0')
         self.assertIs(WaitMachineNotPresent, type(condition))
-        self.assertEqual('0', condition.machine)
+        self.assertEqual(['0'], condition.machines)
         self.assertEqual(600, condition.timeout)
 
     def test_make_remove_machine_condition_azure(self):
@@ -1196,7 +1196,7 @@ class TestModelClient(ClientTest):
         client.env._config['type'] = 'azure'
         condition = client.make_remove_machine_condition('0')
         self.assertIs(WaitMachineNotPresent, type(condition))
-        self.assertEqual('0', condition.machine)
+        self.assertEqual(['0'], condition.machines)
         self.assertEqual(1200, condition.timeout)
 
     def test_add_ssh_machines_retry(self):
@@ -1294,10 +1294,11 @@ class TestModelClient(ClientTest):
     def test_remove_machine_force(self):
         client = fake_juju_client()
         with patch_juju_call(client._backend) as juju_mock:
-            client.remove_machine('0', force=True)
+            condition = client.remove_machine('0', force=True)
         call = backend_call(
             client, 'remove-machine', ('--force', '0'), 'name:name')
         juju_mock.assert_called_once_with(*call[1], **call[2])
+        self.assertEqual(condition, WaitMachineNotPresent('0', 600))
 
     def test_remove_machine_azure(self):
         client = fake_juju_client(JujuData('name', {
