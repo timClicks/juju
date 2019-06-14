@@ -421,6 +421,7 @@ func (st *State) cleanupApplication(applicationname string, cleanupArgs []bson.R
 	op := app.DestroyOperation()
 	op.DestroyStorage = destroyStorage
 	op.Force = force
+	op.RemoveOffers = true
 	err = st.ApplyOperation(op)
 	if len(op.Errors) != 0 {
 		logger.Warningf("operational errors cleaning up application %v: %v", applicationname, op.Errors)
