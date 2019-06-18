@@ -326,7 +326,7 @@ func PreferredSeries(cfg HasDefaultSeries) string {
 	return jujuversion.SupportedLTS()
 }
 
-// Config holds an immutable environment configuration.
+// Config holds the model's configuration settings.
 type Config struct {
 	// defined holds the attributes that are defined for Config.
 	// unknown holds the other attributes that are passed in (aka UnknownAttrs).
@@ -342,9 +342,6 @@ const (
 	UseDefaults Defaulting = true
 	NoDefaults  Defaulting = false
 )
-
-// TODO(rog) update the doc comment below - it's getting messy
-// and it assumes too much prior knowledge.
 
 // New returns a new configuration.  Fields that are common to all
 // environment providers are verified.  If useDefaults is UseDefaults,
