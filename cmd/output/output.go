@@ -4,8 +4,10 @@
 package output
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/juju/ansiterm"
 	"github.com/juju/cmd"
@@ -18,6 +20,33 @@ import (
 var DefaultFormatters = map[string]cmd.Formatter{
 	"yaml": cmd.FormatYaml,
 	"json": cmd.FormatJson,
+}
+
+// FormatPlain writes minimally-interpreted value inputs to writer,
+// then adds a trailing newline character.
+//
+// When value is []string, concatenated with a newline. An input of
+// [][]byte is concatenated with an empty string.
+func FormatPlain(writer io.Writer, value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	valueStr := ""
+	switch value := value.(type) {
+	case string:
+		valueStr = value
+	case []string:
+		valueStr = strings.Join(value, "\n")
+	case [][]byte:
+		valueStr = string(bytes.Join(value, []byte("")))
+	default:
+		valueStr = fmt.Sprintf("%s", value)
+	}
+	if valueStr == "" {
+		return nil
+	}
+	_, err := writer.Write([]byte(valueStr + "\n"))
+	return err
 }
 
 // TabWriter returns a new tab writer with common layout definition.

@@ -31,6 +31,12 @@ var validLeader = regexp.MustCompile("^" + leaderSnippet + "$")
 // nameRule describes the name format of an action or keyName must match to be valid.
 var nameRule = charm.GetActionNameRule()
 
+var formatters = output.DefaultFormatters
+
+func init() {
+	formatters["plain"] = output.FormatPlain
+}
+
 func NewRunCommand() cmd.Command {
 	return modelcmd.Wrap(&runCommand{})
 }
@@ -90,7 +96,7 @@ Examples:
 // SetFlags offers an option for YAML output.
 func (c *runCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.ActionCommandBase.SetFlags(f)
-	c.out.AddFlags(f, "yaml", output.DefaultFormatters)
+	c.out.AddFlags(f, "yaml", formatters)
 	f.Var(&c.paramsYAML, "params", "Path to yaml-formatted params file")
 	f.BoolVar(&c.parseStrings, "string-args", false, "Use raw string values of CLI args")
 	f.Var(&c.wait, "wait", "Wait for results, with optional timeout")
