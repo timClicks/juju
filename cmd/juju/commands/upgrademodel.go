@@ -150,6 +150,11 @@ func (c *baseUpgradeCommand) Init(args []string) error {
 		if err != nil {
 			return err
 		}
+		if vers.Tag != "" && c.AgentStream == "" {
+			// if there's a non-empty tag, then we know that the user has
+			// specified alpha, beta, or rc. Those tools can't be found on stable.
+			c.AgentStream = "proposed"
+		}
 		if c.BuildAgent && vers.Build != 0 {
 			// TODO(fwereade): when we start taking versions from actual built
 			// code, we should disable --agent-version when used with --build-agent.

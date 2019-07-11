@@ -978,6 +978,47 @@ func (s *UpgradeJujuSuite) TestResetPreviousUpgrade(c *gc.C) {
 	}
 }
 
+func (s *UpgradeJujuSuite) TestAgentStreams(c *gc.C) {
+	for i, t := range []struct {
+		desc     string
+		args     []string
+		versions []string
+		expected string
+	}{
+		{
+			desc:     "default to released",
+			args:     []string{"--agent-version", "1.21.3"},
+			versions: []string{"1.21.3-quantal-amd64", "1.22.1-quantal-amd64"},
+			expected: "released",
+		},
+		{
+			desc:     "release candidate defaults to proposed",
+			args:     []string{"--agent-version", "1.21.3-rc1"},
+			versions: []string{"1.21.3-quantal-amd64", "1.22.1-quantal-amd64"},
+			expected: "proposed",
+		},
+		{
+			desc:     "alpha defaults to proposed",
+			args:     []string{"--agent-version", "1.21.3-alpha1"},
+			versions: []string{"1.21.3-quantal-amd64", "1.22.1-quantal-amd64"},
+			expected: "proposed",
+		},
+		{
+			desc:     "beta defaults to proposed",
+			args:     []string{"--agent-version", "1.21.3-beta1"},
+			versions: []string{"1.21.3-quantal-amd64", "1.22.1-quantal-amd64"},
+			expected: "proposed",
+		},
+	} {
+		c.Logf("test %d: %v", i, t.desc)
+		fakeAPI := NewFakeUpgradeJujuAPI(c, s.State)
+		command := s.upgradeJujuCommand(nil, fakeAPI, fakeAPI, fakeAPI)
+		err := cmdtesting.InitCommand(command, t.args)
+		c.Assert(err, jc.ErrorIsNil)
+		c.Check(s.Environ.Config().AgentStream(), gc.Equals, t.expected)
+	}
+}
+
 func NewFakeUpgradeJujuAPI(c *gc.C, st *state.State) *fakeUpgradeJujuAPI {
 	nextVersion := version.Binary{
 		Number: jujuversion.Current,
