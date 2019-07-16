@@ -210,14 +210,14 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 	args.UpdateProgress("VM cloned")
-	defer func() {
-		if resultErr == nil {
-			return
-		}
-		if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
-			c.logger.Warningf("failed to delete VM: %s", err)
-		}
-	}()
+	//defer func() {
+	//	if resultErr == nil {
+	//		return
+	//	}
+	//	if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
+	//		c.logger.Warningf("failed to delete VM: %s", err)
+	//	}
+	//}()
 	//if err := c.updateMAC(ctx, tempVM, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
@@ -238,6 +238,11 @@ func (c *Client) CreateVirtualMachine(
 		); err != nil {
 			return nil, errors.Trace(err)
 		}
+	}
+
+	// delete tmp vm to avoid MAC address conflicts
+	if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
+		c.logger.Warningf("failed to delete VM: %s", err)
 	}
 
 	// Finally, power on and return the VM.
