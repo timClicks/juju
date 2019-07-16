@@ -218,6 +218,9 @@ func (c *Client) CreateVirtualMachine(
 			c.logger.Warningf("failed to delete VM: %s", err)
 		}
 	}()
+	//if err := c.updateMAC(ctx, tempVM, taskWaiter); err != nil {
+	//	return nil, errors.Trace(err)
+	//}
 	if _, err := c.detachDisk(ctx, tempVM, taskWaiter); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -488,13 +491,13 @@ func (c *Client) addNetworkDevice(
 	wakeOnLan := true
 	networkDevice.WakeOnLanEnabled = &wakeOnLan
 	networkDevice.Backing = networkBacking
-	if mac != "" {
-		if !VerifyMAC(mac) {
-			return nil, fmt.Errorf("Invalid MAC address: %q", mac)
-		}
-		networkDevice.AddressType = "Manual"
-		networkDevice.MacAddress = mac
-	}
+	//if mac != "" {
+	//	if !VerifyMAC(mac) {
+	//		return nil, fmt.Errorf("Invalid MAC address: %q", mac)
+	//	}
+	//	networkDevice.AddressType = "Manual"
+	//	networkDevice.MacAddress = mac
+	//}
 	networkDevice.Connectable = &types.VirtualDeviceConnectInfo{
 		StartConnected:    true,
 		AllowGuestControl: true,

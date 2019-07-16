@@ -549,6 +549,30 @@ func (c *Client) extendDisk(
 	return errors.Trace(ErrExtendDisk)
 }
 
+//func (c *Client) updateMAC(
+//	ctx context.Context,
+//	vm *object.VirtualMachine,
+//	taskWaiter *taskWaiter,
+//	) error {
+//	var mo mo.VirtualMachine
+//	if err := c.client.RetrieveOne(ctx, vm.Reference(), []string{"config.hardware"}, &mo); err != nil {
+//		return errors.Trace(err)
+//	}
+//
+//	specs := []types.VirtualDeviceConfigSpec{}
+//
+//	for _, device := range mo.Config.Hardware.Device {
+//		device, ok := device.(*types.BaseVirtualEthernetCard)
+//		if !ok {
+//			continue
+//		}
+//		spec := types.VirtualDeviceConfigSpec{
+//			Operation: types.VirtualDeviceConfigSpecOperationEdit,
+//		}
+//		specs = append(specs, spec)
+//	}
+//}
+
 func (c *Client) detachDisk(
 	ctx context.Context,
 	vm *object.VirtualMachine,
