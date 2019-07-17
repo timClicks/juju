@@ -336,6 +336,7 @@ func (c *Client) createImportSpec(
 		s.Flags = &types.VirtualMachineFlagInfo{}
 	}
 	s.Flags.DiskUuidEnabled = &args.EnableDiskUUID
+	//s.DeviceChange
 	if err := c.addRootDisk(s, args, datastore, vmdkDatastorePath); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -386,11 +387,11 @@ func (c *Client) addRootDisk(
 
 		ds := diskDatastore.Reference()
 		disk := &types.VirtualDisk{
+			CapacityInBytes: 10737420000, // 10GiB
 			VirtualDevice: types.VirtualDevice{
 				Key:           existingDisk.VirtualDevice.Key,
 				ControllerKey: existingDisk.VirtualDevice.ControllerKey,
 				UnitNumber:    existingDisk.VirtualDevice.UnitNumber,
-
 				Backing: &types.VirtualDiskFlatVer2BackingInfo{
 					DiskMode:        string(types.VirtualDiskModePersistent),
 
@@ -401,6 +402,9 @@ func (c *Client) addRootDisk(
 					},
 				},
 			},
+		}
+		if args.Constraints.RootDisk != nil {
+			disk.CapacityInBytes = int64(*args.Constraints.RootDisk) * 1024 * 1024
 		}
 		deviceConfigSpec.Device = disk
 		deviceConfigSpec.FileOperation = "" // attach existing disk
