@@ -301,10 +301,14 @@ func (c *Client) createImportSpec(
 	vmdkDatastorePath string,
 ) (*types.VirtualMachineImportSpec, error) {
 	cisp := types.OvfCreateImportSpecParams{
+		DiskProvisioning: "eagerZeroedThick",
 		EntityName: args.Name,
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
 			{Key: "hostname", Value: args.Name},
+		},
+		OvfManagerCommonParams: types.OvfManagerCommonParams{
+			Locale: "US",
 		},
 	}
 
