@@ -391,7 +391,7 @@ func (c *Client) addRootDisk(
 				UnitNumber:    existingDisk.VirtualDevice.UnitNumber,
 				Backing: &types.VirtualDiskFlatVer2BackingInfo{
 					DiskMode:        string(types.VirtualDiskModePersistent),
-					ThinProvisioned: types.NewBool(true),
+					//ThinProvisioned: types.NewBool(true),
 					VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 						FileName:  vmdkDatastorePath,
 						Datastore: &ds,
