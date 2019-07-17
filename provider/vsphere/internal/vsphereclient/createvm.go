@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	humanize "github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/kr/pretty"
@@ -222,33 +221,33 @@ func (c *Client) CreateVirtualMachine(
 	//if err := c.updateMAC(ctx, vm, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
-	if args.Constraints.RootDisk != nil {
-		// The user specified a root disk, so extend the VM's
-		// disk before powering the VM on.
-		args.UpdateProgress(fmt.Sprintf(
-			"extending disk to %s",
-			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
-		))
-		//task, err := vm.PowerOff(ctx)
-		//if err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-		//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
-		//if err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-		//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-
-		if err := c.extendVMRootDisk(
-			ctx, vm, datacenter,
-			*args.Constraints.RootDisk,
-			taskWaiter,
-		); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
+	//if args.Constraints.RootDisk != nil {
+	//	// The user specified a root disk, so extend the VM's
+	//	// disk before powering the VM on.
+	//	args.UpdateProgress(fmt.Sprintf(
+	//		"extending disk to %s",
+	//		humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
+	//	))
+	//	//task, err := vm.PowerOff(ctx)
+	//	//if err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//	//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
+	//	//if err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//	//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//
+	//	if err := c.extendVMRootDisk(
+	//		ctx, vm, datacenter,
+	//		*args.Constraints.RootDisk,
+	//		taskWaiter,
+	//	); err != nil {
+	//		return nil, errors.Trace(err)
+	//	}
+	//}
 
 	//// delete tmp vm to avoid MAC address conflicts
 	//if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
