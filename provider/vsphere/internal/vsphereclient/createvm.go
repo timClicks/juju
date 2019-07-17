@@ -193,23 +193,24 @@ func (c *Client) CreateVirtualMachine(
 	if err := lease.Complete(ctx); err != nil {
 		return nil, errors.Trace(err)
 	}
-	tempVM := object.NewVirtualMachine(c.client.Client, info.Entity)
-	defer func() {
-		if err := c.destroyVM(ctx, tempVM, taskWaiter); err != nil {
-			c.logger.Warningf("failed to delete temporary VM: %s", err)
-		}
-	}()
+	vm := object.NewVirtualMachine(c.client.Client, info.Entity)
+	//defer func() {
+	//	if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
+	//		c.logger.Warningf("failed to delete temporary VM: %s", err)
+	//	}
+	//}()
 
 	// Clone the temporary VM to import the VMDK, as mentioned above.
 	// After cloning the temporary VM, we must detach the original
 	// VMDK from the temporary VM to avoid deleting it when destroying
 	// the VM.
-	c.logger.Debugf("cloning VM")
-	vm, err := c.cloneVM(ctx, tempVM, args.Name, vmFolder, taskWaiter)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	args.UpdateProgress("VM cloned")
+	//c.logger.Debugf("cloning VM")
+	//vm, err := c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
+	//if err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//args.UpdateProgress("VM cloned")
+
 	//defer func() {
 	//	if resultErr == nil {
 	//		return
@@ -218,12 +219,9 @@ func (c *Client) CreateVirtualMachine(
 	//		c.logger.Warningf("failed to delete VM: %s", err)
 	//	}
 	//}()
-	//if err := c.updateMAC(ctx, tempVM, taskWaiter); err != nil {
+	//if err := c.updateMAC(ctx, vm, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
-	if _, err := c.detachDisk(ctx, tempVM, taskWaiter); err != nil {
-		return nil, errors.Trace(err)
-	}
 	if args.Constraints.RootDisk != nil {
 		// The user specified a root disk, so extend the VM's
 		// disk before powering the VM on.
@@ -231,6 +229,18 @@ func (c *Client) CreateVirtualMachine(
 			"extending disk to %s",
 			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
 		))
+		task, err := vm.PowerOff(ctx)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
+			return nil, errors.Trace(err)
+		}
+
 		if err := c.extendVMRootDisk(
 			ctx, vm, datacenter,
 			*args.Constraints.RootDisk,
@@ -240,10 +250,10 @@ func (c *Client) CreateVirtualMachine(
 		}
 	}
 
-	// delete tmp vm to avoid MAC address conflicts
-	if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
-		c.logger.Warningf("failed to delete VM: %s", err)
-	}
+	//// delete tmp vm to avoid MAC address conflicts
+	//if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
+	//	c.logger.Warningf("failed to delete VM: %s", err)
+	//}
 
 	// Finally, power on and return the VM.
 	args.UpdateProgress("powering on")
