@@ -221,7 +221,7 @@ func (c *Client) CreateVirtualMachine(
 	//if err := c.updateMAC(ctx, vm, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
-	if args.Constraints.RootDisk != nil {
+	//if args.Constraints.RootDisk != nil {
 	//	// The user specified a root disk, so extend the VM's
 	//	// disk before powering the VM on.
 	//	args.UpdateProgress(fmt.Sprintf(
@@ -240,14 +240,14 @@ func (c *Client) CreateVirtualMachine(
 	//	//	return nil, errors.Trace(err)
 	//	//}
 	//
-		if err := c.extendVMRootDisk(
-			ctx, vm, datacenter,
-			*args.Constraints.RootDisk,
-			taskWaiter,
-		); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
+	//	if err := c.extendVMRootDisk(
+	//		ctx, vm, datacenter,
+	//		*args.Constraints.RootDisk,
+	//		taskWaiter,
+	//	); err != nil {
+	//		return nil, errors.Trace(err)
+	//	}
+	//}
 
 	//// delete tmp vm to avoid MAC address conflicts
 	//if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
@@ -393,7 +393,7 @@ func (c *Client) addRootDisk(
 				ControllerKey: existingDisk.VirtualDevice.ControllerKey,
 				UnitNumber:    existingDisk.VirtualDevice.UnitNumber,
 				Backing: &types.VirtualDiskFlatVer2BackingInfo{
-					DiskMode:        string(types.VirtualDiskModePersistent),
+					DiskMode: string(types.VirtualDiskModePersistent),
 
 					//ThinProvisioned: types.NewBool(true),
 					VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
@@ -404,7 +404,7 @@ func (c *Client) addRootDisk(
 			},
 		}
 		if args.Constraints.RootDisk != nil {
-			disk.CapacityInBytes = int64(*args.Constraints.RootDisk) * 1024 * 1024
+			disk.CapacityInKB = int64(*args.Constraints.RootDisk) * 1024 // MB -> KB
 		}
 		deviceConfigSpec.Device = disk
 		deviceConfigSpec.FileOperation = "" // attach existing disk
