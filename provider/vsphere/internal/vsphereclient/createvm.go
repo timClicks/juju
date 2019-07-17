@@ -180,7 +180,7 @@ func (c *Client) CreateVirtualMachine(
 	importSpec.ConfigSpec.Name += ".tmp"
 
 	args.UpdateProgress(fmt.Sprintf("creating VM %q", args.Name))
-	c.logger.Debugf("creating temporary VM in folder %s", vmFolder)
+	//c.logger.Debugf("creating temporary VM in folder %s", vmFolder)
 	c.logger.Tracef("import spec: %s", pretty.Sprint(importSpec))
 	lease, err := resourcePool.ImportVApp(ctx, importSpec, vmFolder, nil)
 	if err != nil {
@@ -237,9 +237,9 @@ func (c *Client) CreateVirtualMachine(
 		//if err != nil {
 		//	return nil, errors.Trace(err)
 		//}
-		if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
-			return nil, errors.Trace(err)
-		}
+		//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
+		//	return nil, errors.Trace(err)
+		//}
 
 		if err := c.extendVMRootDisk(
 			ctx, vm, datacenter,
