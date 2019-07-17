@@ -229,14 +229,14 @@ func (c *Client) CreateVirtualMachine(
 			"extending disk to %s",
 			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
 		))
-		task, err := vm.PowerOff(ctx)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		//task, err := vm.PowerOff(ctx)
+		//if err != nil {
+		//	return nil, errors.Trace(err)
+		//}
+		//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
+		//if err != nil {
+		//	return nil, errors.Trace(err)
+		//}
 		if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
 			return nil, errors.Trace(err)
 		}
