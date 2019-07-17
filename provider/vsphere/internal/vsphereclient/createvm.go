@@ -387,7 +387,8 @@ func (c *Client) addRootDisk(
 
 		ds := diskDatastore.Reference()
 		disk := &types.VirtualDisk{
-			CapacityInBytes: 10737420000, // 10GiB
+			CapacityInKB: 10737420, // 10GiB
+
 			VirtualDevice: types.VirtualDevice{
 				Key:           existingDisk.VirtualDevice.Key,
 				ControllerKey: existingDisk.VirtualDevice.ControllerKey,
