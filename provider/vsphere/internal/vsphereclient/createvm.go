@@ -166,7 +166,7 @@ func (c *Client) CreateVirtualMachine(
 	args.UpdateProgress("ensuring .vmdk and .ovf are available")
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-	vmdkDatastorePath, _, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter) // TODO: use OVF path
+	vmdkDatastorePath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
