@@ -39,6 +39,8 @@ type NetworkDevice struct {
 // That's a default network that's defined in OVF.
 const defaultNetwork = "VM Network"
 
+type ReadOVA func() (location string, _ io.ReadCloser, _ error)
+
 // CreateVirtualMachineParams contains the parameters required for creating
 // a new virtual machine.
 type CreateVirtualMachineParams struct {
@@ -62,7 +64,7 @@ type CreateVirtualMachineParams struct {
 	// the OVA from which to extract the VMDK. The location may be
 	// used for reporting progress. The ReadCloser must be closed
 	// by the caller when it is finished with it.
-	ReadOVA func() (location string, _ io.ReadCloser, _ error)
+	ReadOVA ReadOVA
 
 	// OVASHA256 is the expected SHA-256 hash of the OVA.
 	OVASHA256 string
@@ -176,7 +178,7 @@ func (c *Client) CreateVirtualMachine(
 	if err != nil {
 		return nil, errors.Annotate(err, "creating import spec")
 	}
-	importSpec.ConfigSpec.Name += ".tmp"
+	//importSpec.ConfigSpec.Name += ".tmp"
 
 	args.UpdateProgress(fmt.Sprintf("creating VM %q", args.Name))
 	//c.logger.Debugf("creating temporary VM in folder %s", vmFolder)
@@ -193,6 +195,10 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 	vm := object.NewVirtualMachine(c.client.Client, info.Entity)
+	err = vm.MarkAsTemplate(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	//defer func() {
 	//	if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
 	//		c.logger.Warningf("failed to delete temporary VM: %s", err)
@@ -301,7 +307,6 @@ func (c *Client) createImportSpec(
 	vmdkDatastorePath string,
 ) (*types.VirtualMachineImportSpec, error) {
 	cisp := types.OvfCreateImportSpecParams{
-		DiskProvisioning: "eagerZeroedThick",
 		EntityName: args.Name,
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
