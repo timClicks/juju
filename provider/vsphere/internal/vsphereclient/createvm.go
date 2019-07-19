@@ -387,6 +387,10 @@ func (c *Client) addRootDisk(
 	diskDatastore *object.Datastore,
 	vmdkDatastorePath string,
 ) error {
+	pathParts := strings.Split(" ", vmdkDatastorePath)
+	if len(pathParts) > 1 {
+		vmdkDatastorePath = pathParts[1]
+	}
 	for _, d := range s.DeviceChange {
 		deviceConfigSpec := d.GetVirtualDeviceConfigSpec()
 		existingDisk, ok := deviceConfigSpec.Device.(*types.VirtualDisk)
