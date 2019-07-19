@@ -191,5 +191,5 @@ func (c *Client) uploadToDatastore(
 			err = datastore.Upload(ctx, r, filename, &p)
 		},
 	)
-	return errors.Annotate(err, "uploading %s to datastore", filename)
+	return errors.Annotatef(err, "uploading %s to datastore", filename)
 }

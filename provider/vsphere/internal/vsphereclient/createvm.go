@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/kr/pretty"
@@ -165,7 +166,7 @@ func (c *Client) CreateVirtualMachine(
 	args.UpdateProgress("ensuring .vmdk and .ovf are available")
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-	vmdkDatastorePath, ovfPath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter) // TODO: use OVF path
+	vmdkDatastorePath, _, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter) // TODO: use OVF path
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -213,7 +214,7 @@ func (c *Client) CreateVirtualMachine(
 	// the VM.
 	//c.logger.Debugf("cloning VM")
 
-	vm, err := c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
+	vm, err = c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -230,33 +231,34 @@ func (c *Client) CreateVirtualMachine(
 	//if err := c.updateMAC(ctx, vm, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
-	//if args.Constraints.RootDisk != nil {
-	//	// The user specified a root disk, so extend the VM's
-	//	// disk before powering the VM on.
-	//	args.UpdateProgress(fmt.Sprintf(
-	//		"extending disk to %s",
-	//		humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
-	//	))
-	//	//task, err := vm.PowerOff(ctx)
-	//	//if err != nil {
-	//	//	return nil, errors.Trace(err)
-	//	//}
-	//	//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
-	//	//if err != nil {
-	//	//	return nil, errors.Trace(err)
-	//	//}
-	//	//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
-	//	//	return nil, errors.Trace(err)
-	//	//}
-	//
-	//	if err := c.extendVMRootDisk(
-	//		ctx, vm, datacenter,
-	//		*args.Constraints.RootDisk,
-	//		taskWaiter,
-	//	); err != nil {
-	//		return nil, errors.Trace(err)
-	//	}
-	//}
+
+	if args.Constraints.RootDisk != nil {
+		// The user specified a root disk, so extend the VM's
+		// disk before powering the VM on.
+		args.UpdateProgress(fmt.Sprintf(
+			"extending disk to %s",
+			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
+		))
+		//task, err := vm.PowerOff(ctx)
+		//if err != nil {
+		//	return nil, errors.Trace(err)
+		//}
+		//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
+		//if err != nil {
+		//	return nil, errors.Trace(err)
+		//}
+		//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
+		//	return nil, errors.Trace(err)
+		//}
+
+		if err := c.extendVMRootDisk(
+			ctx, vm, datacenter,
+			*args.Constraints.RootDisk,
+			taskWaiter,
+		); err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
 
 	//// delete tmp vm to avoid MAC address conflicts
 	//if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
@@ -310,7 +312,7 @@ func (c *Client) createImportSpec(
 	vmdkDatastorePath string,
 ) (*types.VirtualMachineImportSpec, error) {
 	cisp := types.OvfCreateImportSpecParams{
-		EntityName: args.Name,
+		EntityName: args.Name + "-tpml",
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
 			{Key: "hostname", Value: args.Name},
