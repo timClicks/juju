@@ -162,13 +162,15 @@ func (c *Client) CreateVirtualMachine(
 
 	// Ensure the VMDK is present in the datastore, uploading it if it
 	// doesn't already exist.
+	args.UpdateProgress("ensuring .vmdk and .ovf are available")
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-	vmdkDatastorePath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
+	vmdkDatastorePath, ovfPath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter) // TODO: use OVF path
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	defer releaseVMDK()
+
 
 	// Import the VApp, creating a temporary VM. This is necessary to
 	// import the VMDK, which exists in the datastore as a not-a-disk
@@ -210,11 +212,12 @@ func (c *Client) CreateVirtualMachine(
 	// VMDK from the temporary VM to avoid deleting it when destroying
 	// the VM.
 	//c.logger.Debugf("cloning VM")
-	//vm, err := c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
-	//if err != nil {
-	//	return nil, errors.Trace(err)
-	//}
-	//args.UpdateProgress("VM cloned")
+
+	vm, err := c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	args.UpdateProgress("VM cloned")
 
 	//defer func() {
 	//	if resultErr == nil {
@@ -387,10 +390,6 @@ func (c *Client) addRootDisk(
 	diskDatastore *object.Datastore,
 	vmdkDatastorePath string,
 ) error {
-	pathParts := strings.Split(" ", vmdkDatastorePath)
-	if len(pathParts) > 1 { // vSAN prepends "[vsanDatastore] " to the filename
-		vmdkDatastorePath = pathParts[1]
-	}
 	for _, d := range s.DeviceChange {
 		deviceConfigSpec := d.GetVirtualDeviceConfigSpec()
 		existingDisk, ok := deviceConfigSpec.Device.(*types.VirtualDisk)
@@ -408,8 +407,7 @@ func (c *Client) addRootDisk(
 				UnitNumber:    existingDisk.VirtualDevice.UnitNumber,
 				Backing: &types.VirtualDiskFlatVer2BackingInfo{
 					DiskMode: string(types.VirtualDiskModePersistent),
-
-					//ThinProvisioned: types.NewBool(true),
+					ThinProvisioned: types.NewBool(false),
 					VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 						FileName:  vmdkDatastorePath,
 						Datastore: &ds,

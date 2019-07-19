@@ -33,7 +33,7 @@ func (c *Client) ensureVMDK(
 	datastore *object.Datastore,
 	datacenter *object.Datacenter,
 	taskWaiter *taskWaiter,
-) (datastorePath string, release func(), resultErr error) {
+) (vmdkPath string, ovfPath string, release func(), resultErr error) {
 
 	// Each controller maintains its own image cache. All compute
 	// provisioners (i.e. each model's) run on the same controller
@@ -46,7 +46,7 @@ func (c *Client) ensureVMDK(
 		Delay: time.Second,
 	})
 	if err != nil {
-		return "", nil, errors.Annotate(err, "acquiring lock")
+		return "", "", nil, errors.Annotate(err, "acquiring lock")
 	}
 	defer func() {
 		if release == nil {
@@ -70,30 +70,30 @@ func (c *Client) ensureVMDK(
 			// existing, older VMDK, and then create it below.
 			task, err := fileManager.DeleteDatastoreFile(ctx, dirDatastorePath, datacenter)
 			if err != nil {
-				return "", nil, errors.Trace(err)
+				return "", "", nil, errors.Trace(err)
 			}
 			if _, err := taskWaiter.waitTask(ctx, task, "deleting image directory"); err != nil {
-				return "", nil, errors.Annotate(err, "deleting image directory")
+				return "", "", nil, errors.Annotate(err, "deleting image directory")
 			}
 		case object.DatastoreNoSuchDirectoryError:
 			// Image directory doesn't exist; create it below.
 			break
 		default:
-			return "", nil, errors.Trace(err)
+			return "", "", nil, errors.Trace(err)
 		}
 		if err := fileManager.MakeDirectory(ctx, dirDatastorePath, datacenter, true); err != nil {
-			return "", nil, errors.Annotate(err, "creating image directory")
+			return "", "", nil, errors.Annotate(err, "creating image directory")
 		}
 	} else {
 		// The disk has already been uploaded.
-		return vmdkDatastorePath, mutexReleaser.Release, nil
+		return vmdkDatastorePath, ovfFilename, mutexReleaser.Release, nil
 	}
 
 	// Fetch the OVA, and decode in-memory to find the VMDK stream.
 	// An OVA is a tar archive.
 	ovaLocation, ovaReadCloser, err := args.ReadOVA()
 	if err != nil {
-		return "", nil, errors.Annotate(err, "fetching OVA")
+		return "", "", nil, errors.Annotate(err, "fetching OVA")
 	}
 	defer ovaReadCloser.Close()
 
@@ -106,7 +106,7 @@ func (c *Client) ensureVMDK(
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return "", nil, errors.Annotate(err, "reading OVA")
+			return "", "", nil, errors.Annotate(err, "reading OVA")
 		}
 		if strings.HasSuffix(header.Name, ".vmdk") {
 			vmdkSize = header.Size
@@ -115,7 +115,7 @@ func (c *Client) ensureVMDK(
 				ctx, ovaTarReader, vmdkSize, datastore, tempFilename,
 				args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
 			); err != nil {
-				return "", nil, errors.Annotate(err, "uploading VMDK to datastore")
+				return "", "", nil, errors.Annotate(err, "uploading VMDK to datastore")
 			}
 		} else if strings.HasSuffix(header.Name, ".ovf") {
 			tempFilename := ovfFilename + ".tmp"
@@ -124,17 +124,17 @@ func (c *Client) ensureVMDK(
 				ctx, ovaTarReader, vmdkSize, datastore, tempFilename,
 				args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
 			); err != nil {
-				return "", nil, errors.Annotate(err, "uploading OVF to datastore")
+				return "", "", nil, errors.Annotate(err, "uploading OVF to datastore")
 			}
 		}
 	}
 
 	// Finish reading the rest of the OVA, so we can compute the hash.
 	if _, err := io.Copy(sha256sum, ovaReadCloser); err != nil {
-		return "", nil, errors.Annotate(err, "reading OVA")
+		return "", "", nil, errors.Annotate(err, "reading OVA")
 	}
 	if fmt.Sprintf("%x", sha256sum.Sum(nil)) != args.OVASHA256 {
-		return "", nil, errors.New("SHA-256 hash mismatch for OVA")
+		return "", "", nil, errors.New("SHA-256 hash mismatch for OVA")
 	}
 
 	// Move the temporary VMDK into its target location.
@@ -147,10 +147,10 @@ func (c *Client) ensureVMDK(
 		true,
 	)
 	if err != nil {
-		return "", nil, errors.Trace(err)
+		return "", "", nil, errors.Trace(err)
 	}
 	if _, err := taskWaiter.waitTask(ctx, task, "moving VMDK"); err != nil {
-		return "", nil, errors.Trace(err)
+		return "", "", nil, errors.Trace(err)
 	}
 
 	task, err = fileManager.MoveDatastoreFile(
@@ -162,12 +162,12 @@ func (c *Client) ensureVMDK(
 		true,
 	)
 	if err != nil {
-		return "", nil, errors.Trace(err)
+		return "", "", nil, errors.Trace(err)
 	}
 	if _, err := taskWaiter.waitTask(ctx, task, "moving OVF"); err != nil {
-		return "", nil, errors.Trace(err)
+		return "", "", nil, errors.Trace(err)
 	}
-	return vmdkDatastorePath, mutexReleaser.Release, nil
+	return vmdkFilename, ovfFilename, mutexReleaser.Release, nil
 }
 
 func (c *Client) uploadToDatastore(
@@ -191,5 +191,5 @@ func (c *Client) uploadToDatastore(
 			err = datastore.Upload(ctx, r, filename, &p)
 		},
 	)
-	return errors.Annotate(err, "uploading VMDK to datastore")
+	return errors.Annotate(err, "uploading %s to datastore", filename)
 }
