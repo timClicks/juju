@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/kr/pretty"
@@ -163,7 +162,6 @@ func (c *Client) CreateVirtualMachine(
 
 	// Ensure the VMDK is present in the datastore, uploading it if it
 	// doesn't already exist.
-	args.UpdateProgress("ensuring .vmdk and .ovf are available")
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
 	vmdkDatastorePath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
@@ -171,7 +169,6 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 	defer releaseVMDK()
-
 
 	// Import the VApp, creating a temporary VM. This is necessary to
 	// import the VMDK, which exists in the datastore as a not-a-disk
@@ -213,12 +210,11 @@ func (c *Client) CreateVirtualMachine(
 	// VMDK from the temporary VM to avoid deleting it when destroying
 	// the VM.
 	//c.logger.Debugf("cloning VM")
-
-	vm, err = c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	args.UpdateProgress("VM cloned")
+	//vm, err := c.cloneVM(ctx, vm, args.Name, vmFolder, taskWaiter)
+	//if err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//args.UpdateProgress("VM cloned")
 
 	//defer func() {
 	//	if resultErr == nil {
@@ -231,34 +227,33 @@ func (c *Client) CreateVirtualMachine(
 	//if err := c.updateMAC(ctx, vm, taskWaiter); err != nil {
 	//	return nil, errors.Trace(err)
 	//}
-
-	if args.Constraints.RootDisk != nil {
-		// The user specified a root disk, so extend the VM's
-		// disk before powering the VM on.
-		args.UpdateProgress(fmt.Sprintf(
-			"extending disk to %s",
-			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
-		))
-		//task, err := vm.PowerOff(ctx)
-		//if err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-		//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
-		//if err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-		//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
-		//	return nil, errors.Trace(err)
-		//}
-
-		if err := c.extendVMRootDisk(
-			ctx, vm, datacenter,
-			*args.Constraints.RootDisk,
-			taskWaiter,
-		); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
+	//if args.Constraints.RootDisk != nil {
+	//	// The user specified a root disk, so extend the VM's
+	//	// disk before powering the VM on.
+	//	args.UpdateProgress(fmt.Sprintf(
+	//		"extending disk to %s",
+	//		humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
+	//	))
+	//	//task, err := vm.PowerOff(ctx)
+	//	//if err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//	//_, err = taskWaiter.waitTask(ctx, task, "powering on VM")
+	//	//if err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//	//if _, err := c.detachDisk(ctx, vm, taskWaiter); err != nil {
+	//	//	return nil, errors.Trace(err)
+	//	//}
+	//
+	//	if err := c.extendVMRootDisk(
+	//		ctx, vm, datacenter,
+	//		*args.Constraints.RootDisk,
+	//		taskWaiter,
+	//	); err != nil {
+	//		return nil, errors.Trace(err)
+	//	}
+	//}
 
 	//// delete tmp vm to avoid MAC address conflicts
 	//if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
@@ -312,7 +307,7 @@ func (c *Client) createImportSpec(
 	vmdkDatastorePath string,
 ) (*types.VirtualMachineImportSpec, error) {
 	cisp := types.OvfCreateImportSpecParams{
-		EntityName: args.Name + "-tpml",
+		EntityName: args.Name,
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
 			{Key: "hostname", Value: args.Name},
@@ -392,6 +387,10 @@ func (c *Client) addRootDisk(
 	diskDatastore *object.Datastore,
 	vmdkDatastorePath string,
 ) error {
+	pathParts := strings.Split(" ", vmdkDatastorePath)
+	if len(pathParts) > 1 { // vSAN prepends [vsanDatastore
+		vmdkDatastorePath = pathParts[1]
+	}
 	for _, d := range s.DeviceChange {
 		deviceConfigSpec := d.GetVirtualDeviceConfigSpec()
 		existingDisk, ok := deviceConfigSpec.Device.(*types.VirtualDisk)
@@ -409,7 +408,8 @@ func (c *Client) addRootDisk(
 				UnitNumber:    existingDisk.VirtualDevice.UnitNumber,
 				Backing: &types.VirtualDiskFlatVer2BackingInfo{
 					DiskMode: string(types.VirtualDiskModePersistent),
-					ThinProvisioned: types.NewBool(false),
+
+					//ThinProvisioned: types.NewBool(true),
 					VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 						FileName:  vmdkDatastorePath,
 						Datastore: &ds,

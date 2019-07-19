@@ -59,7 +59,6 @@ func (c *Client) ensureVMDK(
 	// it; this is to remove older VMDKs.
 	vmdkDirectory := path.Join(args.VMDKDirectory, args.Series)
 	vmdkFilename := path.Join(vmdkDirectory, args.OVASHA256+".vmdk")
-	ovfFilename := path.Join(vmdkDirectory, args.OVASHA256+".ovf")
 	vmdkDatastorePath := datastore.Path(vmdkFilename)
 	dirDatastorePath := datastore.Path(vmdkDirectory)
 	fileManager := object.NewFileManager(c.client.Client)
@@ -99,34 +98,26 @@ func (c *Client) ensureVMDK(
 
 	sha256sum := sha256.New()
 	ovaTarReader := tar.NewReader(io.TeeReader(ovaReadCloser, sha256sum))
-	c.logger.Debugf("uploading %s contents to %s", ovaLocation, vmdkDirectory)
 	var vmdkSize int64
 	for {
 		header, err := ovaTarReader.Next()
-		if err == io.EOF {
-			break
-		} else if err != nil {
+		if err != nil {
 			return "", nil, errors.Annotate(err, "reading OVA")
 		}
 		if strings.HasSuffix(header.Name, ".vmdk") {
 			vmdkSize = header.Size
-			tempFilename := vmdkFilename + ".tmp"
-			if err := c.uploadToDatastore(
-				ctx, ovaTarReader, vmdkSize, datastore, tempFilename,
-				args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
-			); err != nil {
-				return "", nil, errors.Annotate(err, "uploading VMDK to datastore")
-			}
-		} else if strings.HasSuffix(header.Name, ".ovf") {
-			tempFilename := ovfFilename + ".tmp"
-			c.logger.Debugf("uploading %s contents to %s", ovaLocation, tempFilename)
-			if err := c.uploadToDatastore(
-				ctx, ovaTarReader, vmdkSize, datastore, tempFilename,
-				args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
-			); err != nil {
-				return "", nil, errors.Annotate(err, "uploading OVF to datastore")
-			}
+			break
 		}
+	}
+
+	// Upload the VMDK, and then convert it to a disk.
+	tempFilename := vmdkFilename + ".tmp"
+	c.logger.Debugf("uploading %s contents to %s", ovaLocation, tempFilename)
+	if err := c.uploadToDatastore(
+		ctx, ovaTarReader, vmdkSize, datastore, tempFilename,
+		args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
+	); err != nil {
+		return "", nil, errors.Annotate(err, "uploading VMDK to datastore")
 	}
 
 	// Finish reading the rest of the OVA, so we can compute the hash.
@@ -140,9 +131,9 @@ func (c *Client) ensureVMDK(
 	// Move the temporary VMDK into its target location.
 	task, err := fileManager.MoveDatastoreFile(
 		ctx,
-		datastore.Path(vmdkFilename + ".tmp"),
+		datastore.Path(tempFilename),
 		datacenter,
-		datastore.Path(vmdkFilename),
+		vmdkDatastorePath,
 		datacenter,
 		true,
 	)
@@ -150,21 +141,6 @@ func (c *Client) ensureVMDK(
 		return "", nil, errors.Trace(err)
 	}
 	if _, err := taskWaiter.waitTask(ctx, task, "moving VMDK"); err != nil {
-		return "", nil, errors.Trace(err)
-	}
-
-	task, err = fileManager.MoveDatastoreFile(
-		ctx,
-		datastore.Path(ovfFilename+ ".tmp"),
-		datacenter,
-		datastore.Path(ovfFilename),
-		datacenter,
-		true,
-	)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
-	if _, err := taskWaiter.waitTask(ctx, task, "moving OVF"); err != nil {
 		return "", nil, errors.Trace(err)
 	}
 	return vmdkDatastorePath, mutexReleaser.Release, nil
