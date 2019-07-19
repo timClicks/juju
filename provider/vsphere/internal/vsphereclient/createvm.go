@@ -388,7 +388,7 @@ func (c *Client) addRootDisk(
 	vmdkDatastorePath string,
 ) error {
 	pathParts := strings.Split(" ", vmdkDatastorePath)
-	if len(pathParts) > 1 {
+	if len(pathParts) > 1 { // vSAN prepends "[vsanDatastore] " to the filename
 		vmdkDatastorePath = pathParts[1]
 	}
 	for _, d := range s.DeviceChange {
