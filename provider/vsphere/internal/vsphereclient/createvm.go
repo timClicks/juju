@@ -4,6 +4,7 @@
 package vsphereclient
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -14,13 +15,15 @@ import (
 	"strings"
 	"time"
 
-	humanize "github.com/dustin/go-humanize"
+	"github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/kr/pretty"
+	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/ovf"
 	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
 
 	"github.com/juju/juju/core/constraints"
@@ -106,6 +109,14 @@ type CreateVirtualMachineParams struct {
 	EnableDiskUUID bool
 }
 
+// vmTemplatePath returns the well-known path to
+// the template VM for this controller
+func vmTemplatePath(vmpath string) string {
+	return vmpath + "-template" // TODO(tsm): make more robust
+}
+
+
+
 // CreateVirtualMachine creates and powers on a new VM.
 //
 // This method imports an OVF template using the vSphere API. This process
@@ -150,6 +161,38 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 
+	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
+
+	templateVM, err := finder.VirtualMachine(ctx, vmTemplatePath(args.Name))
+	if err != nil {
+		if _, ok := err.(*find.NotFoundError); !ok {
+			return nil, errors.Trace(nil)
+		}
+	} else {
+		args.UpdateProgress("cloning template")
+		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, taskWaiter)
+		if err2 != nil {
+			return nil, errors.Trace(err2)
+		}
+
+		args.UpdateProgress("powering on")
+		task, err := vm.PowerOn(ctx)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		var res mo.VirtualMachine
+		if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
+			return nil, errors.Trace(err)
+		}
+		return &res, nil
+	}
+
+	args.UpdateProgress("creating template")
+
 	// Select the datastore.
 	datastoreMo, err := c.selectDatastore(ctx, args)
 	if err != nil {
@@ -162,8 +205,7 @@ func (c *Client) CreateVirtualMachine(
 	// Ensure the VMDK is present in the datastore, uploading it if it
 	// doesn't already exist.
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
-	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-	vmdkDatastorePath, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
+	_, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -173,12 +215,12 @@ func (c *Client) CreateVirtualMachine(
 	// import the VMDK, which exists in the datastore as a not-a-disk
 	// file type.
 	args.UpdateProgress("creating import spec")
-	importSpec, err := c.createImportSpec(ctx, args, datastore, vmdkDatastorePath)
+	spec, err := c.createImportSpec(ctx, args, datastore)
 	if err != nil {
 		return nil, errors.Annotate(err, "creating import spec")
 	}
-	importSpec.ConfigSpec.Name += ".tmp"
 
+	importSpec := spec.ImportSpec
 	args.UpdateProgress(fmt.Sprintf("creating VM %q", args.Name))
 	c.logger.Debugf("creating temporary VM in folder %s", vmFolder)
 	c.logger.Tracef("import spec: %s", pretty.Sprint(importSpec))
@@ -186,41 +228,74 @@ func (c *Client) CreateVirtualMachine(
 	if err != nil {
 		return nil, errors.Annotatef(err, "failed to import vapp")
 	}
-	info, err := lease.Wait(ctx, nil)
+	info, err := lease.Wait(ctx, spec.FileItem)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	updater := lease.StartUpdater(ctx, info)
+	defer updater.Done()
+
+	//type uploadItem struct {
+	//	item types.OvfFileItem
+	//	url  *url.URL
+	//}
+	//var uploadItems []uploadItem
+	//for _, device := range info.DeviceUrl {
+	//	for _, item := range spec.FileItem {
+	//		if device.ImportKey != item.DeviceId {
+	//			continue
+	//		}
+	//		u, err := c.client.Client.ParseURL(device.Url)
+	//		if err != nil {
+	//			return nil, errors.Trace(err)
+	//		}
+	//		uploadItems = append(uploadItems, uploadItem{
+	//			item: item,
+	//			url:  u,
+	//		})
+	//	}
+	//}
+
+	ovaLocation, ovaReadCloser, err := args.ReadOVA()
+	if err != nil {
+		return nil, errors.Annotate(err, "fetching OVA")
+	}
+	defer ovaReadCloser.Close()
+	ovaTarReader := tar.NewReader(ovaReadCloser)
+	for {
+		header, err := ovaTarReader.Next()
+		if err != nil {
+			return nil, errors.Annotate(err, "reading OVA")
+		}
+		if strings.HasSuffix(header.Name, ".vmdk") {
+			item := info.Items[0]
+			opts := soap.Upload{
+				ContentLength: header.Size,
+				//Progress:      logger,
+			}
+
+			err = lease.Upload(ctx, item, ovaTarReader, opts)
+			if err != nil {
+				return nil, errors.Annotatef(
+					err, "streaming %s to %s",
+					ovaLocation,
+					item.URL,
+				)
+			}
+			break
+		}
+	}
+
+	//if err := lease.HttpNfcLeaseComplete(ctx); err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+
 	if err := lease.Complete(ctx); err != nil {
 		return nil, errors.Trace(err)
 	}
-	tempVM := object.NewVirtualMachine(c.client.Client, info.Entity)
-	defer func() {
-		if err := c.destroyVM(ctx, tempVM, taskWaiter); err != nil {
-			c.logger.Warningf("failed to delete temporary VM: %s", err)
-		}
-	}()
+	vm := object.NewVirtualMachine(c.client.Client, info.Entity)
 
-	// Clone the temporary VM to import the VMDK, as mentioned above.
-	// After cloning the temporary VM, we must detach the original
-	// VMDK from the temporary VM to avoid deleting it when destroying
-	// the VM.
-	c.logger.Debugf("cloning VM")
-	vm, err := c.cloneVM(ctx, tempVM, args.Name, vmFolder, taskWaiter)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	args.UpdateProgress("VM cloned")
-	defer func() {
-		if resultErr == nil {
-			return
-		}
-		if err := c.destroyVM(ctx, vm, taskWaiter); err != nil {
-			c.logger.Warningf("failed to delete VM: %s", err)
-		}
-	}()
-	if _, err := c.detachDisk(ctx, tempVM, taskWaiter); err != nil {
-		return nil, errors.Trace(err)
-	}
 	if args.Constraints.RootDisk != nil {
 		// The user specified a root disk, so extend the VM's
 		// disk before powering the VM on.
@@ -237,21 +312,27 @@ func (c *Client) CreateVirtualMachine(
 		}
 	}
 
+	err = vm.MarkAsTemplate(ctx)
+	if err != nil {
+		return nil, errors.Annotate(err, "marking as template")
+	}
+
 	// Finally, power on and return the VM.
-	args.UpdateProgress("powering on")
-	task, err := vm.PowerOn(ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	var res mo.VirtualMachine
-	if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
-		return nil, errors.Trace(err)
-	}
-	return &res, nil
+	//args.UpdateProgress("powering on")
+	//task, err := vm.PowerOn(ctx)
+	//if err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
+	//if err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//var res mo.VirtualMachine
+	//if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//return &res, nil
+	return c.CreateVirtualMachine(ctx, args)
 }
 
 func (c *Client) extendVMRootDisk(
@@ -281,8 +362,7 @@ func (c *Client) createImportSpec(
 	ctx context.Context,
 	args CreateVirtualMachineParams,
 	datastore *object.Datastore,
-	vmdkDatastorePath string,
-) (*types.VirtualMachineImportSpec, error) {
+) (*types.OvfCreateImportSpecResult, error) {
 	cisp := types.OvfCreateImportSpecParams{
 		EntityName: args.Name,
 		PropertyMapping: []types.KeyValue{
@@ -298,7 +378,6 @@ func (c *Client) createImportSpec(
 	} else if spec.Error != nil {
 		return nil, errors.New(spec.Error[0].LocalizedMessage)
 	}
-	importSpec := spec.ImportSpec.(*types.VirtualMachineImportSpec)
 	s := &spec.ImportSpec.(*types.VirtualMachineImportSpec).ConfigSpec
 
 	// Apply resource constraints.
@@ -317,10 +396,6 @@ func (c *Client) createImportSpec(
 	}
 	if s.Flags == nil {
 		s.Flags = &types.VirtualMachineFlagInfo{}
-	}
-	s.Flags.DiskUuidEnabled = &args.EnableDiskUUID
-	if err := c.addRootDisk(s, args, datastore, vmdkDatastorePath); err != nil {
-		return nil, errors.Trace(err)
 	}
 
 	// Apply metadata. Note that we do not have the ability set create or
@@ -351,7 +426,7 @@ func (c *Client) createImportSpec(
 		}
 		c.logger.Debugf("network device: %+v", device)
 	}
-	return importSpec, nil
+	return spec, nil
 }
 
 func (c *Client) addRootDisk(

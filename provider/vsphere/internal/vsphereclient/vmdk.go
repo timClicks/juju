@@ -21,6 +21,7 @@ import (
 	"github.com/vmware/govmomi/vim25/soap"
 )
 
+
 // ensureVMDK ensures that the VMDK contained within the OVA returned
 // by args.ReadOVA is either already in the datastore, or else stores it.
 //
