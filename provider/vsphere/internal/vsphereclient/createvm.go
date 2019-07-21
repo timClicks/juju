@@ -191,9 +191,11 @@ func (c *Client) CreateVirtualMachine(
 		return &res, nil
 	}
 
+	c.logger.Debugf("Creating unit template")
 	args.UpdateProgress("creating template")
 
 	// Select the datastore.
+	c.logger.Debugf("Selecting datastore")
 	datastoreMo, err := c.selectDatastore(ctx, args)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -205,15 +207,16 @@ func (c *Client) CreateVirtualMachine(
 	// Ensure the VMDK is present in the datastore, uploading it if it
 	// doesn't already exist.
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
-	_, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	defer releaseVMDK()
+	//_, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
+	//if err != nil {
+	//	return nil, errors.Trace(err)
+	//}
+	//defer releaseVMDK()
 
 	// Import the VApp, creating a temporary VM. This is necessary to
 	// import the VMDK, which exists in the datastore as a not-a-disk
 	// file type.
+	c.logger.Debugf("Creating import spec")
 	args.UpdateProgress("creating import spec")
 	spec, err := c.createImportSpec(ctx, args, datastore)
 	if err != nil {
@@ -257,6 +260,7 @@ func (c *Client) CreateVirtualMachine(
 	//	}
 	//}
 
+	c.logger.Debugf("Streaming VMDK")
 	ovaLocation, ovaReadCloser, err := args.ReadOVA()
 	if err != nil {
 		return nil, errors.Annotate(err, "fetching OVA")
@@ -272,7 +276,7 @@ func (c *Client) CreateVirtualMachine(
 			item := info.Items[0]
 			opts := soap.Upload{
 				ContentLength: header.Size,
-				//Progress:      logger,
+				//Progress:      c.logger.Debugf,
 			}
 
 			err = lease.Upload(ctx, item, ovaTarReader, opts)
@@ -283,6 +287,7 @@ func (c *Client) CreateVirtualMachine(
 					item.URL,
 				)
 			}
+			c.logger.Debugf("VMDK uploaded")
 			break
 		}
 	}
