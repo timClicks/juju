@@ -269,7 +269,6 @@ func (c *Client) CreateVirtualMachine(
 	//	}
 	//}
 
-	c.logger.Debugf("Streaming VMDK")
 	ovaLocation, ovaReadCloser, err := args.ReadOVA()
 	if err != nil {
 		return nil, errors.Annotate(err, "fetching OVA")
@@ -283,6 +282,7 @@ func (c *Client) CreateVirtualMachine(
 		}
 		if strings.HasSuffix(header.Name, ".vmdk") {
 			item := info.Items[0]
+			c.logger.Infof("Streaming VMDK from %s to %s", ovaLocation, item.URL)
 			opts := soap.Upload{
 				ContentLength: header.Size,
 				//Progress:      c.logger.Debugf,
