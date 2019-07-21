@@ -180,7 +180,7 @@ func (c *Client) CreateVirtualMachine(
 		}
 	} else {
 		args.UpdateProgress("cloning template")
-		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, args.ResourcePool, taskWaiter)
+		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, &args.ResourcePool, taskWaiter)
 		if err2 != nil {
 			return nil, errors.Trace(err2)
 		}
