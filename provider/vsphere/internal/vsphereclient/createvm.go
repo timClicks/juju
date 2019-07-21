@@ -111,8 +111,18 @@ type CreateVirtualMachineParams struct {
 
 // vmTemplatePath returns the well-known path to
 // the template VM for this controller
+//
+// Example:
+//   vmTemplatePath("juju-abc123-1")
+//   "juju-abc123-template"
 func vmTemplatePath(vmpath string) string {
-	return vmpath + "-template" // TODO(tsm): make more robust
+	parts := strings.Split(vmpath, "-")
+	templateNameParts := []string{
+		parts[0],
+		parts[1],
+		"template",
+	}
+	return strings.Join(templateNameParts, "-")
 }
 
 
@@ -369,7 +379,7 @@ func (c *Client) createImportSpec(
 	datastore *object.Datastore,
 ) (*types.OvfCreateImportSpecResult, error) {
 	cisp := types.OvfCreateImportSpecParams{
-		EntityName: args.Name,
+		EntityName: vmTemplatePath(args.Name),
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
 			{Key: "hostname", Value: args.Name},
