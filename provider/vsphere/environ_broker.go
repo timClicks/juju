@@ -293,7 +293,6 @@ func (env *sessionEnviron) AllInstances(ctx context.ProviderCallContext) ([]inst
 	results := make([]instances.Instance, 0, len(vms))
 	for _, vm := range vms {
 		// TODO(tsm): use property from VM
-		logger.Infof("found VM: %s", vm.Name)
 		if strings.HasSuffix(vm.Name, "-template") {
 			continue
 		}
