@@ -459,18 +459,21 @@ func (c *Client) cloneVM(
 	srcVM *object.VirtualMachine,
 	dstName string,
 	vmFolder *object.Folder,
+	resourcePool *types.ManagedObjectReference,
 	taskWaiter *taskWaiter,
 ) (*object.VirtualMachine, error) {
 	task, err := srcVM.Clone(ctx, vmFolder, dstName, types.VirtualMachineCloneSpec{
-		Config:   &types.VirtualMachineConfigSpec{},
-		Location: types.VirtualMachineRelocateSpec{},
+		Config: &types.VirtualMachineConfigSpec{},
+		Location: types.VirtualMachineRelocateSpec{
+			Pool: resourcePool,
+		},
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	info, err := taskWaiter.waitTask(ctx, task, "cloning VM")
 	if err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 	return object.NewVirtualMachine(c.client.Client, info.Result.(types.ManagedObjectReference)), nil
 }

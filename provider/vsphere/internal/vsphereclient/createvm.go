@@ -172,7 +172,7 @@ func (c *Client) CreateVirtualMachine(
 	}
 
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-
+	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	templateVM, err := finder.VirtualMachine(ctx, vmTemplatePath(args.Name))
 	if err != nil {
 		if _, ok := err.(*find.NotFoundError); !ok {
@@ -180,7 +180,7 @@ func (c *Client) CreateVirtualMachine(
 		}
 	} else {
 		args.UpdateProgress("cloning template")
-		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, taskWaiter)
+		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, args.ResourcePool, taskWaiter)
 		if err2 != nil {
 			return nil, errors.Trace(err2)
 		}
@@ -216,7 +216,6 @@ func (c *Client) CreateVirtualMachine(
 
 	// Ensure the VMDK is present in the datastore, uploading it if it
 	// doesn't already exist.
-	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	//_, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
 	//if err != nil {
 	//	return nil, errors.Trace(err)
