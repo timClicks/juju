@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -291,6 +292,10 @@ func (env *sessionEnviron) AllInstances(ctx context.ProviderCallContext) ([]inst
 	// whether or not we got an error.
 	results := make([]instances.Instance, len(vms))
 	for i, vm := range vms {
+		// TODO(tsm): use property from VM
+		if strings.HasSuffix(vm.Name, "-template") {
+			continue
+		}
 		results[i] = newInstance(vm, env.environ)
 	}
 	return results, err
