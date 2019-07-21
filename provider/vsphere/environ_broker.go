@@ -290,13 +290,14 @@ func (env *sessionEnviron) AllInstances(ctx context.ProviderCallContext) ([]inst
 
 	// Turn mo.VirtualMachine values into *environInstance values,
 	// whether or not we got an error.
-	results := make([]instances.Instance, len(vms))
-	for i, vm := range vms {
+	results := make([]instances.Instance, 0, len(vms))
+	for _, vm := range vms {
 		// TODO(tsm): use property from VM
+		logger.Infof("found VM: %s", vm.Name)
 		if strings.HasSuffix(vm.Name, "-template") {
 			continue
 		}
-		results[i] = newInstance(vm, env.environ)
+		results = append(results, newInstance(vm, env.environ))
 	}
 	return results, err
 }
