@@ -129,28 +129,10 @@ func vmTemplatePath(vmpath string) string {
 
 // CreateVirtualMachine creates and powers on a new VM.
 //
-// This method imports an OVF template using the vSphere API. This process
-// comprises the following steps:
-//   1. Ensure the VMDK contained within the OVA archive (args.OVA) is
-//      stored in the datastore, in this controller's cache. If it is
-//      there already, we use it; otherwise we remove any existing VMDK
-//      for the same series, and upload the new one.
-//   2. Call CreateImportSpec [0] with a pre-canned OVF, which validates
-//      the OVF descriptor against the hardware supported by the host system.
-//      If the validation succeeds,/the method returns an ImportSpec to use
-//      for importing the virtual machine.
-//   3. Prepare all necessary parameters (CPU, memory, root disk, etc.), and
-//      call the ImportVApp method [0]. This method is responsible for actually
-//      creating the VM. This VM is temporary, and used only to convert the
-//      VMDK file into a disk type file.
-//   4. Clone the temporary VM from step 3, to create the VM we will associate
-//      with the Juju machine.
-//   5. If the user specified a root-disk constraint, extend the VMDK if its
-//      capacity is less than the specified constraint.
-//   6. Power on the virtual machine.
-//
-// [0] https://www.vmware.com/support/developer/vc-sdk/visdk41pubs/ApiReference/
-// [1] https://www.vmware.com/support/developer/vc-sdk/visdk41pubs/ApiReference/vim.HttpNfcLease.html
+// Important parameters to args include the ResourcePool
+// and ReadOVA. They determine the source of the backing
+// disk image and and where the VM will be provisioned
+// respectively.
 func (c *Client) CreateVirtualMachine(
 	ctx context.Context,
 	args CreateVirtualMachineParams,
@@ -214,17 +196,6 @@ func (c *Client) CreateVirtualMachine(
 	datastore.DatacenterPath = datacenter.InventoryPath
 	datastore.SetInventoryPath(path.Join(folders.DatastoreFolder.InventoryPath, datastoreMo.Name))
 
-	// Ensure the VMDK is present in the datastore, uploading it if it
-	// doesn't already exist.
-	//_, releaseVMDK, err := c.ensureVMDK(ctx, args, datastore, datacenter, taskWaiter)
-	//if err != nil {
-	//	return nil, errors.Trace(err)
-	//}
-	//defer releaseVMDK()
-
-	// Import the VApp, creating a temporary VM. This is necessary to
-	// import the VMDK, which exists in the datastore as a not-a-disk
-	// file type.
 	c.logger.Debugf("Creating import spec")
 	args.UpdateProgress("creating import spec")
 	spec, err := c.createImportSpec(ctx, args, datastore)
@@ -248,27 +219,6 @@ func (c *Client) CreateVirtualMachine(
 	updater := lease.StartUpdater(ctx, info)
 	defer updater.Done()
 
-	//type uploadItem struct {
-	//	item types.OvfFileItem
-	//	url  *url.URL
-	//}
-	//var uploadItems []uploadItem
-	//for _, device := range info.DeviceUrl {
-	//	for _, item := range spec.FileItem {
-	//		if device.ImportKey != item.DeviceId {
-	//			continue
-	//		}
-	//		u, err := c.client.Client.ParseURL(device.Url)
-	//		if err != nil {
-	//			return nil, errors.Trace(err)
-	//		}
-	//		uploadItems = append(uploadItems, uploadItem{
-	//			item: item,
-	//			url:  u,
-	//		})
-	//	}
-	//}
-
 	ovaLocation, ovaReadCloser, err := args.ReadOVA()
 	if err != nil {
 		return nil, errors.Annotate(err, "fetching OVA")
@@ -285,7 +235,7 @@ func (c *Client) CreateVirtualMachine(
 			c.logger.Infof("Streaming VMDK from %s to %s", ovaLocation, item.URL)
 			opts := soap.Upload{
 				ContentLength: header.Size,
-				//Progress:      c.logger.Debugf,
+				//Progress:      c.logger.Debugf, // TODO(tsm) enable progress reporting
 			}
 
 			err = lease.Upload(ctx, item, ovaTarReader, opts)
@@ -300,10 +250,6 @@ func (c *Client) CreateVirtualMachine(
 			break
 		}
 	}
-
-	//if err := lease.HttpNfcLeaseComplete(ctx); err != nil {
-	//	return nil, errors.Trace(err)
-	//}
 
 	if err := lease.Complete(ctx); err != nil {
 		return nil, errors.Trace(err)
@@ -331,21 +277,6 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Annotate(err, "marking as template")
 	}
 
-	// Finally, power on and return the VM.
-	//args.UpdateProgress("powering on")
-	//task, err := vm.PowerOn(ctx)
-	//if err != nil {
-	//	return nil, errors.Trace(err)
-	//}
-	//taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
-	//if err != nil {
-	//	return nil, errors.Trace(err)
-	//}
-	//var res mo.VirtualMachine
-	//if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
-	//	return nil, errors.Trace(err)
-	//}
-	//return &res, nil
 	return c.CreateVirtualMachine(ctx, args)
 }
 
