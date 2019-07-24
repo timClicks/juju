@@ -124,8 +124,6 @@ func vmTemplatePath(vmpath string) string {
 	return strings.Join(templateNameParts, "-")
 }
 
-
-
 // CreateVirtualMachine creates and powers on a new VM.
 //
 // Important parameters to args include the ResourcePool
