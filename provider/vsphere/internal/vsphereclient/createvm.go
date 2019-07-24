@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/kr/pretty"
@@ -162,7 +161,7 @@ func (c *Client) CreateVirtualMachine(
 		}
 	} else {
 		args.UpdateProgress("cloning template")
-		vm, err2 := c.cloneVM(ctx, templateVM, args.Name, vmFolder, &args.ResourcePool, taskWaiter)
+		vm, err2 := c.cloneVM(ctx, args, templateVM, args.Name, vmFolder, datacenter, taskWaiter)
 		if err2 != nil {
 			return nil, errors.Trace(err2)
 		}
@@ -255,22 +254,6 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 	vm := object.NewVirtualMachine(c.client.Client, info.Entity)
-
-	if args.Constraints.RootDisk != nil {
-		// The user specified a root disk, so extend the VM's
-		// disk before powering the VM on.
-		args.UpdateProgress(fmt.Sprintf(
-			"extending disk to %s",
-			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
-		))
-		if err := c.extendVMRootDisk(
-			ctx, vm, datacenter,
-			*args.Constraints.RootDisk,
-			taskWaiter,
-		); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
 
 	err = vm.MarkAsTemplate(ctx)
 	if err != nil {

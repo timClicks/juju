@@ -5,11 +5,13 @@ package vsphereclient
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
@@ -456,16 +458,36 @@ func (c *Client) destroyVM(
 
 func (c *Client) cloneVM(
 	ctx context.Context,
+	args CreateVirtualMachineParams,
 	srcVM *object.VirtualMachine,
 	dstName string,
 	vmFolder *object.Folder,
-	resourcePool *types.ManagedObjectReference,
+	datacenter *object.Datacenter,
 	taskWaiter *taskWaiter,
 ) (*object.VirtualMachine, error) {
+	configSpec := &types.VirtualMachineConfigSpec{}
+
+	if args.Constraints.HasCpuCores() {
+		configSpec.NumCPUs = int32(*args.Constraints.CpuCores)
+	}
+	if args.Constraints.HasMem() {
+		configSpec.MemoryMB = int64(*args.Constraints.Mem)
+	}
+	if args.Constraints.HasCpuPower() {
+		cpuPower := int64(*args.Constraints.CpuPower)
+		configSpec.CpuAllocation = &types.ResourceAllocationInfo{
+			Limit:       &cpuPower,
+			Reservation: &cpuPower,
+		}
+	}
+	if configSpec.Flags == nil {
+		configSpec.Flags = &types.VirtualMachineFlagInfo{}
+	}
+
 	task, err := srcVM.Clone(ctx, vmFolder, dstName, types.VirtualMachineCloneSpec{
-		Config: &types.VirtualMachineConfigSpec{},
+		Config: configSpec,
 		Location: types.VirtualMachineRelocateSpec{
-			Pool: resourcePool,
+			Pool: &args.ResourcePool,
 		},
 	})
 	if err != nil {
@@ -475,7 +497,26 @@ func (c *Client) cloneVM(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return object.NewVirtualMachine(c.client.Client, info.Result.(types.ManagedObjectReference)), nil
+
+	vm := object.NewVirtualMachine(c.client.Client, info.Result.(types.ManagedObjectReference))
+
+	if args.Constraints.RootDisk != nil {
+		// The user specified a root disk, so extend the VM's
+		// disk before powering the VM on.
+		args.UpdateProgress(fmt.Sprintf(
+			"extending disk to %s",
+			humanize.IBytes(*args.Constraints.RootDisk*1024*1024),
+		))
+		if err := c.extendVMRootDisk(
+			ctx, vm, datacenter,
+			*args.Constraints.RootDisk,
+			taskWaiter,
+		); err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
+	return vm, nil
 }
 
 func (c *Client) getDiskWithFileBacking(
