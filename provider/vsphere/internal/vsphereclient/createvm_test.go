@@ -29,7 +29,8 @@ func (s *clientSuite) TestCreateVirtualMachine(c *gc.C) {
 	dequeueStatusUpdates := func() {
 		for {
 			select {
-			case <-statusUpdatesCh:
+			case recv := <-statusUpdatesCh:
+				logger.Debugf("STATUS UPDATE %s (updates pending %#v)", recv, &statusUpdates)
 			default:
 				return
 			}
@@ -39,6 +40,7 @@ func (s *clientSuite) TestCreateVirtualMachine(c *gc.C) {
 	args := baseCreateVirtualMachineParams(c)
 	testClock := args.Clock.(*testclock.Clock)
 	s.onImageUpload = func(r *http.Request) {
+		c.Logf("UPLOADING %#v", r)
 		dequeueStatusUpdates()
 
 		// Wait 1.5 seconds, which is long enough to trigger the
@@ -172,12 +174,14 @@ func (s *clientSuite) TestCreateVirtualMachineNoDiskUUID(c *gc.C) {
 	args := baseCreateVirtualMachineParams(c)
 	args.EnableDiskUUID = false
 	client := s.newFakeClient(&s.roundTripper, "dc0")
+	//panic("created client")
 	_, err := client.CreateVirtualMachine(context.Background(), args)
+
 	c.Assert(err, jc.ErrorIsNil)
 
 	s.roundTripper.CheckCall(c, 26, "ImportVApp", &types.VirtualMachineImportSpec{
 		ConfigSpec: types.VirtualMachineConfigSpec{
-			Name: "vm-name.tmp",
+			Name: "vm-name",
 			ExtraConfig: []types.BaseOptionValue{
 				&types.OptionValue{Key: "k", Value: "v"},
 			},
@@ -351,7 +355,7 @@ func (s *clientSuite) TestCreateVirtualMachineMultipleNetworksSpecifiedFirstDefa
 
 	s.roundTripper.CheckCall(c, 26, "ImportVApp", &types.VirtualMachineImportSpec{
 		ConfigSpec: types.VirtualMachineConfigSpec{
-			Name: "vm-name.tmp",
+			Name: "vm-name",
 			ExtraConfig: []types.BaseOptionValue{
 				&types.OptionValue{Key: "k", Value: "v"},
 			},
@@ -402,7 +406,7 @@ func (s *clientSuite) TestCreateVirtualMachineNetworkSpecifiedDVPortgroup(c *gc.
 	// the DVS's UUID. This bumps the ImportVApp position by one.
 	s.roundTripper.CheckCall(c, 27, "ImportVApp", &types.VirtualMachineImportSpec{
 		ConfigSpec: types.VirtualMachineConfigSpec{
-			Name: "vm-name.tmp",
+			Name: args.Name + "-template",
 			ExtraConfig: []types.BaseOptionValue{
 				&types.OptionValue{Key: "k", Value: "v"},
 			},

@@ -22,6 +22,7 @@ import (
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/ovf"
 	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/progress"
 	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
 
@@ -116,12 +117,15 @@ type CreateVirtualMachineParams struct {
 //   "juju-abc123-template"
 func vmTemplatePath(vmpath string) string {
 	parts := strings.Split(vmpath, "-")
-	templateNameParts := []string{
-		parts[0],
-		parts[1],
-		"template",
+	if len(parts) > 2 {
+		templateNameParts := []string{
+			parts[0],
+			parts[1],
+			"template",
+		}
+		return strings.Join(templateNameParts, "-")
 	}
-	return strings.Join(templateNameParts, "-")
+	return vmpath + "-template"
 }
 
 // CreateVirtualMachine creates and powers on a new VM.
@@ -149,15 +153,20 @@ func (c *Client) CreateVirtualMachine(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
 	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
 	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	templateVM, err := finder.VirtualMachine(ctx, vmTemplatePath(args.Name))
+	c.logger.Infof("template? %s", templateVM)
+
+	first := true
 	if err != nil {
 		if _, ok := err.(*find.NotFoundError); !ok {
 			return nil, errors.Trace(nil)
 		}
 	} else {
+		if !first {
+			panic("shouldn't recurse")
+		}
 		args.UpdateProgress("cloning template")
 		vm, err2 := c.cloneVM(ctx, args, templateVM, args.Name, vmFolder, datacenter, taskWaiter)
 		if err2 != nil {
@@ -177,10 +186,11 @@ func (c *Client) CreateVirtualMachine(
 		if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
 			return nil, errors.Trace(err)
 		}
+		first = false
 		return &res, nil
 	}
 
-	c.logger.Debugf("Creating unit template")
+	c.logger.Debugf("Creating VM template")
 	args.UpdateProgress("creating template")
 
 	// Select the datastore.
@@ -199,6 +209,7 @@ func (c *Client) CreateVirtualMachine(
 	if err != nil {
 		return nil, errors.Annotate(err, "creating import spec")
 	}
+	c.logger.Debugf("Import spec created")
 
 	importSpec := spec.ImportSpec
 	args.UpdateProgress(fmt.Sprintf("creating VM %q", args.Name))
@@ -230,12 +241,16 @@ func (c *Client) CreateVirtualMachine(
 		if strings.HasSuffix(header.Name, ".vmdk") {
 			item := info.Items[0]
 			c.logger.Infof("Streaming VMDK from %s to %s", ovaLocation, item.URL)
-			opts := soap.Upload{
-				ContentLength: header.Size,
-				//Progress:      c.logger.Debugf, // TODO(tsm) enable progress reporting
-			}
+			withStatusUpdater(ctx, "streaming vmdk", args.Clock, args.UpdateProgress, args.UpdateProgressInterval,
+				func(ctx context.Context, sink progress.Sinker) {
+					opts := soap.Upload{
+						ContentLength: header.Size,
+						Progress: sink,
+					}
 
-			err = lease.Upload(ctx, item, ovaTarReader, opts)
+					err = lease.Upload(ctx, item, ovaTarReader, opts)
+				},
+			)
 			if err != nil {
 				return nil, errors.Annotatef(
 					err, "streaming %s to %s",
@@ -243,6 +258,7 @@ func (c *Client) CreateVirtualMachine(
 					item.URL,
 				)
 			}
+
 			c.logger.Debugf("VMDK uploaded")
 			break
 		}
@@ -297,8 +313,10 @@ func (c *Client) createImportSpec(
 		},
 	}
 
+	c.logger.Debugf("Fetching OVF manager")
 	ovfManager := ovf.NewManager(c.client.Client)
 	spec, err := ovfManager.CreateImportSpec(ctx, UbuntuOVF, args.ResourcePool, datastore, cisp)
+	c.logger.Debugf("ImportSpec built")
 	if err != nil {
 		return nil, errors.Trace(err)
 	} else if spec.Error != nil {
@@ -306,14 +324,18 @@ func (c *Client) createImportSpec(
 	}
 	s := &spec.ImportSpec.(*types.VirtualMachineImportSpec).ConfigSpec
 
+	c.logger.Debugf("Applying resource constraints")
 	// Apply resource constraints.
 	if args.Constraints.HasCpuCores() {
+		c.logger.Debugf("Applying num-cpu constraint")
 		s.NumCPUs = int32(*args.Constraints.CpuCores)
 	}
 	if args.Constraints.HasMem() {
+		c.logger.Debugf("Applying mem constraint")
 		s.MemoryMB = int64(*args.Constraints.Mem)
 	}
 	if args.Constraints.HasCpuPower() {
+		c.logger.Debugf("Applying cpu-power constraint")
 		cpuPower := int64(*args.Constraints.CpuPower)
 		s.CpuAllocation = &types.ResourceAllocationInfo{
 			Limit:       &cpuPower,

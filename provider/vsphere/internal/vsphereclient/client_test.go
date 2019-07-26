@@ -229,10 +229,19 @@ func (s *clientSuite) SetUpTest(c *gc.C) {
 		"FakeModelVmFolder": {{
 			Obj: types.ManagedObjectReference{
 				Type:  "VirtualMachine",
+				Value: "FakeVmTemplate",
+			},
+			PropSet: []types.DynamicProperty{
+				{Name: "name", Val: "juju-vm-template"},
+			},
+		},
+			{
+			Obj: types.ManagedObjectReference{
+				Type:  "VirtualMachine",
 				Value: "FakeVm0",
 			},
 			PropSet: []types.DynamicProperty{
-				{Name: "name", Val: "vm-0"},
+				{Name: "name", Val: "juju-vm-0"},
 			},
 		}, {
 			Obj: types.ManagedObjectReference{
@@ -240,7 +249,7 @@ func (s *clientSuite) SetUpTest(c *gc.C) {
 				Value: "FakeVm1",
 			},
 			PropSet: []types.DynamicProperty{
-				{Name: "name", Val: "vm-1"},
+				{Name: "name", Val: "juju-vm-1"},
 			},
 		}},
 		"FakeVm0": {{
@@ -249,7 +258,7 @@ func (s *clientSuite) SetUpTest(c *gc.C) {
 				Value: "FakeVm0",
 			},
 			PropSet: []types.DynamicProperty{
-				{Name: "name", Val: "vm-0"},
+				{Name: "name", Val: "juju-vm-0"},
 				{Name: "runtime.powerState", Val: "poweredOff"},
 				{
 					Name: "config.hardware.device",
@@ -280,8 +289,40 @@ func (s *clientSuite) SetUpTest(c *gc.C) {
 				Value: "FakeVm1",
 			},
 			PropSet: []types.DynamicProperty{
-				{Name: "name", Val: "vm-1"},
+				{Name: "name", Val: "juju-vm-1"},
 				{Name: "runtime.powerState", Val: "poweredOn"},
+				{
+					Name: "config.hardware.device",
+					Val: []types.BaseVirtualDevice{
+						&types.VirtualDisk{
+							VirtualDevice: types.VirtualDevice{
+								Backing: &types.VirtualDiskFlatVer2BackingInfo{
+									VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
+										FileName: "disk.vmdk",
+									},
+								},
+							},
+							CapacityInKB: 1024 * 1024 * 10, // 10 GiB
+						},
+					},
+				},
+				{
+					Name: "resourcePool",
+					Val: types.ManagedObjectReference{
+						Type:  "ResourcePool",
+						Value: "FakeResourcePool1",
+					},
+				},
+			},
+		}},
+		"FakeVmTemplate": {{
+			Obj: types.ManagedObjectReference{
+				Type:  "VirtualMachine",
+				Value: "FakeVmTemplate",
+			},
+			PropSet: []types.DynamicProperty{
+				{Name: "name", Val: "juju-vm-template"},
+				{Name: "runtime.powerState", Val: "poweredOff"},
 				{
 					Name: "config.hardware.device",
 					Val: []types.BaseVirtualDevice{
@@ -395,6 +436,7 @@ func (s *clientSuite) SetUpTest(c *gc.C) {
 	s.uploadRequests = nil
 	s.onImageUpload = nil
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.Infof("HTTP %#v", r)
 		var buf bytes.Buffer
 		io.Copy(&buf, r.Body)
 		rcopy := *r
