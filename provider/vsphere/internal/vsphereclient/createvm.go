@@ -109,85 +109,35 @@ type CreateVirtualMachineParams struct {
 	EnableDiskUUID bool
 }
 
-// vmTemplatePath returns the well-known path to
+// vmTemplateName returns the well-known path to
 // the template VM for this controller
 //
 // Example:
-//   vmTemplatePath("juju-abc123-1")
+//   vmTemplateName("juju-abc123-1")
 //   "juju-abc123-template"
-func vmTemplatePath(vmpath string) string {
+func vmTemplateName(vmpath string) string {
 	parts := strings.Split(vmpath, "-")
 	if len(parts) > 2 {
-		templateNameParts := []string{
-			parts[0],
-			parts[1],
-			"template",
-		}
-		return strings.Join(templateNameParts, "-")
+		return fmt.Sprintf("%s-%s-template", parts[0], parts[1])
 	}
 	return vmpath + "-template"
 }
 
-// CreateVirtualMachine creates and powers on a new VM.
-//
-// Important parameters to args include the ResourcePool
-// and ReadOVA. They determine the source of the backing
-// disk image and and where the VM will be provisioned
-// respectively.
-func (c *Client) CreateVirtualMachine(
+func (c *Client) ensureTemplateVM(
 	ctx context.Context,
 	args CreateVirtualMachineParams,
-) (_ *mo.VirtualMachine, resultErr error) {
-
-	// Locate the folder in which to create the VM.
+	vmFolder *object.Folder,
+) (*object.VirtualMachine, error) {
 	finder, datacenter, err := c.finder(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	folders, err := datacenter.Folders(ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
+	templateVM, err := finder.VirtualMachine(ctx, vmTemplateName(args.Name))
+	if err == nil {
+		return templateVM, nil
 	}
-	folderPath := path.Join(folders.VmFolder.InventoryPath, args.Folder)
-	vmFolder, err := finder.Folder(ctx, folderPath)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
-	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
-	templateVM, err := finder.VirtualMachine(ctx, vmTemplatePath(args.Name))
-	c.logger.Infof("template? %s", templateVM)
-
-	first := true
-	if err != nil {
-		if _, ok := err.(*find.NotFoundError); !ok {
-			return nil, errors.Trace(nil)
-		}
-	} else {
-		if !first {
-			panic("shouldn't recurse")
-		}
-		args.UpdateProgress("cloning template")
-		vm, err2 := c.cloneVM(ctx, args, templateVM, args.Name, vmFolder, datacenter, taskWaiter)
-		if err2 != nil {
-			return nil, errors.Trace(err2)
-		}
-
-		args.UpdateProgress("powering on")
-		task, err := vm.PowerOn(ctx)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		var res mo.VirtualMachine
-		if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
-			return nil, errors.Trace(err)
-		}
-		first = false
-		return &res, nil
+	if _, ok := err.(*find.NotFoundError); !ok {
+		return nil, errors.Trace(nil)
 	}
 
 	c.logger.Debugf("Creating VM template")
@@ -195,6 +145,10 @@ func (c *Client) CreateVirtualMachine(
 
 	// Select the datastore.
 	c.logger.Debugf("Selecting datastore")
+	folders, err := datacenter.Folders(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	datastoreMo, err := c.selectDatastore(ctx, args)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -212,9 +166,10 @@ func (c *Client) CreateVirtualMachine(
 	c.logger.Debugf("Import spec created")
 
 	importSpec := spec.ImportSpec
-	args.UpdateProgress(fmt.Sprintf("creating VM %q", args.Name))
-	c.logger.Debugf("creating temporary VM in folder %s", vmFolder)
+	args.UpdateProgress(fmt.Sprintf("creating template VM %q", vmTemplateName(args.Name)))
+	c.logger.Debugf("creating template VM in folder %s", vmFolder)
 	c.logger.Tracef("import spec: %s", pretty.Sprint(importSpec))
+	resourcePool := object.NewResourcePool(c.client.Client, args.ResourcePool)
 	lease, err := resourcePool.ImportVApp(ctx, importSpec, vmFolder, nil)
 	if err != nil {
 		return nil, errors.Annotatef(err, "failed to import vapp")
@@ -245,7 +200,7 @@ func (c *Client) CreateVirtualMachine(
 				func(ctx context.Context, sink progress.Sinker) {
 					opts := soap.Upload{
 						ContentLength: header.Size,
-						Progress: sink,
+						Progress:      sink,
 					}
 
 					err = lease.Upload(ctx, item, ovaTarReader, opts)
@@ -268,13 +223,78 @@ func (c *Client) CreateVirtualMachine(
 		return nil, errors.Trace(err)
 	}
 	vm := object.NewVirtualMachine(c.client.Client, info.Entity)
-
 	err = vm.MarkAsTemplate(ctx)
 	if err != nil {
 		return nil, errors.Annotate(err, "marking as template")
 	}
+	return vm, nil
+}
 
-	return c.CreateVirtualMachine(ctx, args)
+// CreateVirtualMachine creates and powers on a new VM.
+//
+// Important parameters to args include the ResourcePool
+// and ReadOVA. They determine the source of the backing
+// disk image and and where the VM will be provisioned
+// respectively.
+func (c *Client) CreateVirtualMachine(
+	ctx context.Context,
+	args CreateVirtualMachineParams,
+) (_ *mo.VirtualMachine, resultErr error) {
+
+	// Locate the folder in which to create the VM.
+	finder, datacenter, err := c.finder(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	folders, err := datacenter.Folders(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	folderPath := path.Join(folders.VmFolder.InventoryPath, args.Folder)
+	vmFolder, err := finder.Folder(ctx, folderPath)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	templateVM, err := c.ensureTemplateVM(ctx, args, vmFolder)
+	if err != nil {
+		return nil, errors.Annotate(err, "creating template VM")
+	}
+
+	args.UpdateProgress("cloning template")
+	taskWaiter := &taskWaiter{args.Clock, args.UpdateProgress, args.UpdateProgressInterval}
+	vm, err2 := c.cloneVM(ctx, args, templateVM, args.Name, vmFolder, datacenter, taskWaiter)
+	if err2 != nil {
+		return nil, errors.Trace(err2)
+	}
+
+	vmConfigSpec := types.VirtualMachineConfigSpec{}
+	err = c.buildConfigSpec(ctx, args, &vmConfigSpec)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	task, err := vm.Reconfigure(ctx, vmConfigSpec)
+	if err != nil {
+		return nil, err
+	}
+	_, err = taskWaiter.waitTask(ctx, task, "applying config spec to VM")
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	args.UpdateProgress("powering on")
+	task, err = vm.PowerOn(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	taskInfo, err := taskWaiter.waitTask(ctx, task, "powering on VM")
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var res mo.VirtualMachine
+	if err := c.client.RetrieveOne(ctx, *taskInfo.Entity, nil, &res); err != nil {
+		return nil, errors.Trace(err)
+	}
+	return &res, nil
 }
 
 func (c *Client) extendVMRootDisk(
@@ -300,13 +320,63 @@ func (c *Client) extendVMRootDisk(
 	))
 }
 
+func (c *Client) buildConfigSpec(ctx context.Context,
+	args CreateVirtualMachineParams,
+	spec *types.VirtualMachineConfigSpec) error {
+	if spec == nil {
+		spec = &types.VirtualMachineConfigSpec{}
+	}
+	if args.Constraints.HasCpuCores() {
+		spec.NumCPUs = int32(*args.Constraints.CpuCores)
+	}
+	if args.Constraints.HasMem() {
+		spec.MemoryMB = int64(*args.Constraints.Mem)
+	}
+	if args.Constraints.HasCpuPower() {
+		cpuPower := int64(*args.Constraints.CpuPower)
+		spec.CpuAllocation = &types.ResourceAllocationInfo{
+			Limit:       &cpuPower,
+			Reservation: &cpuPower,
+		}
+	}
+	if spec.Flags == nil {
+		spec.Flags = &types.VirtualMachineFlagInfo{}
+	}
+
+	for k, v := range args.Metadata {
+		spec.ExtraConfig = append(spec.ExtraConfig, &types.OptionValue{Key: k, Value: v})
+	}
+
+	networks, dvportgroupConfig, err := c.computeResourceNetworks(ctx, args.ComputeResource)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	for i, networkDevice := range args.NetworkDevices {
+		network := networkDevice.Network
+		if network == "" {
+			network = defaultNetwork
+		}
+
+		networkReference, err := findNetwork(networks, network)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		device, err := c.addNetworkDevice(ctx, spec, networkReference, networkDevice.MAC, dvportgroupConfig)
+		if err != nil {
+			return errors.Annotatef(err, "adding network device %d - network %s", i, network)
+		}
+		c.logger.Debugf("network device: %+v", device)
+	}
+	return nil
+}
+
 func (c *Client) createImportSpec(
 	ctx context.Context,
 	args CreateVirtualMachineParams,
 	datastore *object.Datastore,
 ) (*types.OvfCreateImportSpecResult, error) {
 	cisp := types.OvfCreateImportSpecParams{
-		EntityName: vmTemplatePath(args.Name),
+		EntityName: vmTemplateName(args.Name),
 		PropertyMapping: []types.KeyValue{
 			{Key: "user-data", Value: args.UserData},
 			{Key: "hostname", Value: args.Name},
@@ -323,56 +393,9 @@ func (c *Client) createImportSpec(
 		return nil, errors.New(spec.Error[0].LocalizedMessage)
 	}
 	s := &spec.ImportSpec.(*types.VirtualMachineImportSpec).ConfigSpec
-
-	c.logger.Debugf("Applying resource constraints")
-	// Apply resource constraints.
-	if args.Constraints.HasCpuCores() {
-		c.logger.Debugf("Applying num-cpu constraint")
-		s.NumCPUs = int32(*args.Constraints.CpuCores)
-	}
-	if args.Constraints.HasMem() {
-		c.logger.Debugf("Applying mem constraint")
-		s.MemoryMB = int64(*args.Constraints.Mem)
-	}
-	if args.Constraints.HasCpuPower() {
-		c.logger.Debugf("Applying cpu-power constraint")
-		cpuPower := int64(*args.Constraints.CpuPower)
-		s.CpuAllocation = &types.ResourceAllocationInfo{
-			Limit:       &cpuPower,
-			Reservation: &cpuPower,
-		}
-	}
-	if s.Flags == nil {
-		s.Flags = &types.VirtualMachineFlagInfo{}
-	}
-
-	// Apply metadata. Note that we do not have the ability set create or
-	// apply tags that will show up in vCenter, as that requires a separate
-	// vSphere Automation that we do not have an SDK for.
-	for k, v := range args.Metadata {
-		s.ExtraConfig = append(s.ExtraConfig, &types.OptionValue{Key: k, Value: v})
-	}
-
-	networks, dvportgroupConfig, err := c.computeResourceNetworks(ctx, args.ComputeResource)
+	err = c.buildConfigSpec(ctx, args, s)
 	if err != nil {
 		return nil, errors.Trace(err)
-	}
-
-	for i, networkDevice := range args.NetworkDevices {
-		network := networkDevice.Network
-		if network == "" {
-			network = defaultNetwork
-		}
-
-		networkReference, err := findNetwork(networks, network)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		device, err := c.addNetworkDevice(ctx, s, networkReference, networkDevice.MAC, dvportgroupConfig)
-		if err != nil {
-			return nil, errors.Annotatef(err, "adding network device %d - network %s", i, network)
-		}
-		c.logger.Debugf("network device: %+v", device)
 	}
 	return spec, nil
 }
