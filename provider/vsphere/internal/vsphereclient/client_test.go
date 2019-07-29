@@ -632,10 +632,14 @@ func (s *clientSuite) TestRemoveVirtualMachines(c *gc.C) {
 		retrievePropertiesStubCall("FakeVmFolder"),
 		retrievePropertiesStubCall("FakeControllerVmFolder"),
 		retrievePropertiesStubCall("FakeModelVmFolder"),
-		retrievePropertiesStubCall("FakeVm0", "FakeVm1"),
+		retrievePropertiesStubCall("FakeVmTemplate", "FakeVm0", "FakeVm1"),
+		{"Destroy_Task", nil},
 		{"Destroy_Task", nil},
 		{"PowerOffVM_Task", nil},
 		{"Destroy_Task", nil},
+		{"CreatePropertyCollector", nil},
+		{"CreateFilter", nil},
+		{"WaitForUpdatesEx", nil},
 		{"CreatePropertyCollector", nil},
 		{"CreateFilter", nil},
 		{"WaitForUpdatesEx", nil},
@@ -693,13 +697,15 @@ func (s *clientSuite) TestVirtualMachines(c *gc.C) {
 		retrievePropertiesStubCall("FakeVmFolder"),
 		retrievePropertiesStubCall("FakeControllerVmFolder"),
 		retrievePropertiesStubCall("FakeModelVmFolder"),
+		retrievePropertiesStubCall("FakeVmTemplate"),
 		retrievePropertiesStubCall("FakeVm0"),
 		retrievePropertiesStubCall("FakeVm1"),
 	})
 
-	c.Assert(result, gc.HasLen, 2)
-	c.Assert(result[0].Name, gc.Equals, "vm-0")
-	c.Assert(result[1].Name, gc.Equals, "vm-1")
+	c.Assert(result, gc.HasLen, 3)
+	c.Assert(result[0].Name, gc.Equals, "juju-vm-template")
+	c.Assert(result[1].Name, gc.Equals, "juju-vm-0")
+	c.Assert(result[2].Name, gc.Equals, "juju-vm-1")
 }
 
 func (s *clientSuite) TestDatastores(c *gc.C) {

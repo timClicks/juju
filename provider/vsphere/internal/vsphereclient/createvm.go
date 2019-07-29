@@ -342,6 +342,7 @@ func (c *Client) buildConfigSpec(ctx context.Context,
 	if spec.Flags == nil {
 		spec.Flags = &types.VirtualMachineFlagInfo{}
 	}
+	spec.Flags.DiskUuidEnabled = types.NewBool(args.EnableDiskUUID)
 
 	for k, v := range args.Metadata {
 		spec.ExtraConfig = append(spec.ExtraConfig, &types.OptionValue{Key: k, Value: v})
