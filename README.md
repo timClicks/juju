@@ -26,8 +26,8 @@ Juju is built for operators who want simplicity, security and stability.
 
 Juju is a devops tool that reduces operational complexity through application modelling.
 Once a model is described, Juju identifies the necessary steps to put that plan into action.
-Juju has three core concepts: models, applications and relations.
 
+Juju has three core concepts: models, applications and relations.
 Consider a whiteboard drawing of your service.
 The whiteboard's border is the model, its boxes are applications and the lines between the boxes are relations. 
 
@@ -35,10 +35,6 @@ Juju uses an active agent deployed alongside your applications.
 That agent orchestrates infrastructure, manages applications through the product life cycle.
 Juju can manage bare metal, virtual hardware, containers and applications hosted by any substrate.
 The agent’s capabilities are confined by user permissions and all communication is fully encrypted.
-
-Juju allows you to deploy, configure, manage, maintain, and scale cloud applications quickly and efficiently.
-on public clouds, as well as on prem , OpenStack, Kubernetes and containers.
-You can use Juju from the command line or through its beautiful GUI.
 
 
 ## Next steps
