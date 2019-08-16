@@ -1,3 +1,5 @@
+![](https://raw.githubusercontent.com/timClicks/juju/develop-docs--readme-upgrade/doc/juju-logo.svg)
+
 * Simplify deployment of complex workloads
 * Automate updates, upgrades and other configuration changes
 * Enable fine-grained access control to infrastructure and deployment changes 
