@@ -1,25 +1,22 @@
-![](https://raw.githubusercontent.com/timClicks/juju/develop-docs--readme-upgrade/doc/juju-logo.png)
-
+![](doc/juju-logo.png?raw=true)
 
 ## Why Juju?
 
-* Reduces complexity involved with operations by modelling your complex software deployments
-* Encourages sharing of operations knowledge by encapsulating it reusable components, called charms
-* Enables repeatability of complex deployments
-* Excels at day two operations, such as upgrades, updates and configuration changes
-* Provides portability across clouds, both public and private
+* Reduce complexity  
+* Enable repeatability  
+* Codify operations knowledge  
+* Simplify day two 
+* Maintain portability
 
-Most devops tools work best when operators have fine-grained knowledge about every detail.
-Skilled operators know every hostname, every machine, every subnet and every storage component.
-That makes changes complicated, makes on-boarding difficult and tends to create knowledge silos.
+If your infrastructure can’t be understood by everyone in your organisation, there’s an issue.
+Juju focuses on the applications that your software model defines and how they are related.
 
-Juju flips the default.
-If your infrastructure can’t be understood by everyone in your organisation, that’s a bug.
-Instead of reasoning about discrete machines and their IP addresses, Juju focuses on the applications that are provided by your software model.
+Requiring everyone to know every hostname, every machine, every subnet and every storage volume is brittle.
+This means change is complicated, on-boarding is difficult and tends to create knowledge silos.
+Juju makes those details available, but places the software model at the front.
 
-Keeping a complex deployment up-to-date and functioning perfectly in spite of these changes represents an immense challenge.
-And for operators maintaining these deployments, the cost in both time and cognitive load can be tremendous.
-Juju is built for operators who want simplicity, security and stability.
+With Juju, your team maintains a practical high-level view that makes your backend more adaptable to changes over time. 
+Extending your product should be as simple as deploying its first prototype.
 
 
 ## What is Juju?
@@ -33,14 +30,13 @@ The whiteboard's border is the model, its boxes are applications and the lines b
 
 Juju uses an active agent deployed alongside your applications.
 That agent orchestrates infrastructure, manages applications through the product life cycle.
-Juju can manage bare metal, virtual hardware, containers and applications hosted by any substrate.
 The agent’s capabilities are confined by user permissions and all communication is fully encrypted.
 
 
 ## Next steps
 
-Install Juju https://jaas.ai/docs/installing 
+Read the documentation https://jaas.ai/docs
 
-Walk through a tutorial https://jaas.ai/docs/client-usage-tutorial 
+Ask a question https://discourse.jujucharms.com/
 
-Introduce yourself or ask a question https://discourse.jujucharms.com/
+Install Juju https://jaas.ai/docs/installing
