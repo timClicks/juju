@@ -422,6 +422,132 @@ type DeployCommand struct {
 }
 
 const deployDoc = `
+Use this command to deploy a charm or bundle into your model. You can deploy
+charms and bundles from your local file system, or remote charms hosted on
+the public charm store.
+
+To deploy a charm, provide the public charm's identifier or the path to the 
+charm's source code:
+
+	juju deploy postgresql
+
+	juju deploy /path/to/local/charm
+
+To deploy a bundle, specify its public identifier or the location of a bundle 
+definition file. To overwrite any o
+
+	juju deploy charmed-kubernetes
+
+	juju deploy /path/to/bundle.yaml
+
+The deployment process is highly configurable. The most important options 
+are hardware constraints (--constraints), placement directives (--to),  and 
+application configuration (--config).
+
+
+Minimum Hardware Requirements 
+
+To specify minimum hardware requirements, use the '--constraints' option.
+The --constraints option accepts s a space-delimited list of key=value pairs. 
+Juju uses this information to select an instance type to provision. The 
+key=value syntax follows the following rule:
+
+	<constraint>=<value>[ <constraint-key>=<value>[...]]
+
+To ensure that Juju provisions an instance with at least 8GB RAM,
+4 CPU cores and a root disk size of 40GB, use three constraints within
+double quotes:
+
+	juju deploy <charm> --constraints "mem=8G cores=4 root-disk=40G"
+
+Several constraints are supported, but the exact options available are cloud-
+dependent. See the "Further Information" section below for a link to the 
+reference material.
+
+
+Deploy to a Machine Already in the Model 
+
+To deploy to a pre-existing machine, use the '--to' option with the 
+machine identifier:
+
+	juju deploy <charm> --to [0-9]+
+
+Within a k8s cloud, use labels to deploy pods to specific nodes. For example:
+
+	juju deploy <charm> --to kubernetes.io/hostname=<hostname>
+
+
+Application Configuration
+
+Use the '--config' option to specify application configuration values. This
+option accepts either a path to a YAML-formatted file or a key=value pair.
+
+Key=value pairs can also be passed directly in the command. For example, to
+declare the 'name' key:
+
+  juju deploy <charm> --config <param>=<value> [--config <param2>=<value2> [...]]
+
+
+
+Container Support
+
+Within a k8s cloud, all charms and their workloads are deployed into 
+containers. Outside of Kubernetes, Juju is able to provision containers itself
+based on KVM or LXD. 
+
+To deploy to a container that should be provisioned within a pre-existing 
+machine, specify the container type:
+
+	juju deploy <charm> --to (lxd|kvm)
+
+You may request that Juju adds the container to a specific machine:
+
+    juju deploy <charm> --to (lxd|kvm):[0-9]+
+
+
+Further reading:
+
+    https://jaas.ai/docs/deploying-applications
+    https://jaas.ai/docs/using-constraints
+    https://jaas.ai/docs/constraints-reference
+
+
+These become the application's default constraints (i.e. they are used if the
+application is later scaled out with the ` + "`add-unit`" + ` command).
+
+
+
+
+
+To overcome this
+behaviour use the ` + "`set-constraints`" + ` command to change the application's default
+constraints or add a machine (` + "`add-machine`" + `) with a certain constraint and then
+target that machine with ` + "`add-unit`" + ` by using the '--to' option.
+
+
+Examples:
+
+	juju deploy postgresql
+	(or juju deploy cs:postgresql)
+		Deploy the cs:postgresql charm using default parameters. Juju will
+		create a new application "postgresql" with a single unit "postgresql/0"
+		on a newly provisioned machine.
+
+	juju deploy postgresql --series bionic
+	(or juju deploy cs:bionic/postgresql)
+	(or juju deploy bionic/postgresql)
+		Deploy the cs:postgresql charm, but require that it is deployed onto
+		machines with the series "bionic", rather than the default series 
+		specified by the charm author. 
+
+	juju deploy haproxy-55
+		Deploy version 55 of the cs:haproxy, rather than the most recent 
+		stable release of the charm. 
+
+	juju deploy /path/to/local-charm
+	(or juju deploy /path/to/bundle.yaml)
+		Deploy a local charm by specifying a file path.
+
 A charm can be referred to by its simple name and a series can optionally be
 specified:
 
@@ -459,29 +585,9 @@ A bundle can be expressed similarly to a charm, but not by series:
   juju deploy bundle/mediawiki-single
   juju deploy cs:bundle/mediawiki-single
 
-A local bundle may be deployed by specifying the path to its YAML file:
+  
+	
 
-  juju deploy /path/to/bundle.yaml
-
-The final charm/machine series is determined using an order of precedence (most
-preferred to least):
-
- - the '--series' command option
- - the series stated in the charm URL
- - for a bundle, the series stated in each charm URL (in the bundle file)
- - for a bundle, the series given at the top level (in the bundle file)
- - the 'default-series' model key
- - the top-most series specified in the charm's metadata file
-   (this sets the charm's 'preferred series' in the Charm Store)
-
-An 'application name' provides an alternate name for the application. It works
-only for charms; it is silently ignored for bundles (although the same can be
-done at the bundle file level). Such a name must consist only of lower-case
-letters (a-z), numbers (0-9), and single hyphens (-). The name must begin with
-a letter and not have a group of all numbers follow a hyphen:
-
-  Valid:   myappname, custom-app, app2-scat-23skidoo
-  Invalid: myAppName, custom--app, app2-scat-23, areacode-555-info
 
 Use the '--constraints' option to specify hardware requirements for new machines.
 These become the application's default constraints (i.e. they are used if the
@@ -689,7 +795,7 @@ type DeploymentInfo struct {
 func (c *DeployCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
 		Name:    "deploy",
-		Args:    "<charm or bundle> [<application name>]",
+		Args:    "(<charm>|<bundle>) [<application-name>]",
 		Purpose: "Deploys a new application or bundle.",
 		Doc:     deployDoc,
 	})
