@@ -5,6 +5,7 @@ package caasoperator
 
 import (
 	"github.com/juju/errors"
+	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/common"
@@ -40,7 +41,11 @@ type CAASBrokerInterface interface {
 func NewStateFacade(ctx facade.Context) (*Facade, error) {
 	authorizer := ctx.Auth()
 	resources := ctx.Resources()
-	caasBroker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(ctx.State())
+	model, err := ctx.State().Model()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	caasBroker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(model)
 	if err != nil {
 		return nil, errors.Annotate(err, "getting caas client")
 	}
@@ -168,16 +173,20 @@ func (f *Facade) Charm(args params.Entities) (params.ApplicationCharmResults, er
 			results.Results[i].Error = common.ServerError(err)
 			continue
 		}
-		charm, force, err := application.Charm()
+		ch, force, err := application.Charm()
 		if err != nil {
 			results.Results[i].Error = common.ServerError(err)
 			continue
 		}
 		results.Results[i].Result = &params.ApplicationCharm{
-			URL:                  charm.URL().String(),
+			URL:                  ch.URL().String(),
 			ForceUpgrade:         force,
-			SHA256:               charm.BundleSha256(),
+			SHA256:               ch.BundleSha256(),
 			CharmModifiedVersion: application.CharmModifiedVersion(),
+			DeploymentMode:       string(charm.ModeWorkload),
+		}
+		if d := ch.Meta().Deployment; d != nil {
+			results.Results[i].Result.DeploymentMode = string(d.DeploymentMode)
 		}
 	}
 	return results, nil

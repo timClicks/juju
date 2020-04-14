@@ -10,6 +10,8 @@ import (
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 	"gopkg.in/juju/names.v3"
+	"gopkg.in/mgo.v2/bson"
+	"gopkg.in/mgo.v2/txn"
 
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/state"
@@ -74,7 +76,7 @@ func (s *SubnetSuite) assertSubnetMatchesInfo(c *gc.C, subnet *state.Subnet, inf
 
 func (s *SubnetSuite) TestAddSubnetFailsWithEmptyCIDR(c *gc.C) {
 	subnetInfo := network.SubnetInfo{}
-	s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "missing CIDR")
+	_ = s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "missing CIDR")
 }
 
 func (s *SubnetSuite) assertAddSubnetForInfoFailsWithSuffix(c *gc.C, subnetInfo network.SubnetInfo, errorSuffix string) error {
@@ -87,12 +89,12 @@ func (s *SubnetSuite) assertAddSubnetForInfoFailsWithSuffix(c *gc.C, subnetInfo 
 
 func (s *SubnetSuite) TestAddSubnetFailsWithInvalidCIDR(c *gc.C) {
 	subnetInfo := network.SubnetInfo{CIDR: "foobar"}
-	s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "invalid CIDR address: foobar")
+	_ = s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "invalid CIDR address: foobar")
 }
 
 func (s *SubnetSuite) TestAddSubnetFailsWithOutOfRangeVLANTag(c *gc.C) {
 	subnetInfo := network.SubnetInfo{CIDR: "192.168.0.1/24", VLANTag: 4095}
-	s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "invalid VLAN tag 4095: must be between 0 and 4094")
+	_ = s.assertAddSubnetForInfoFailsWithSuffix(c, subnetInfo, "invalid VLAN tag 4095: must be between 0 and 4094")
 }
 
 func (s *SubnetSuite) TestAddSubnetFailsWithAlreadyExistsForDuplicateCIDRInSameModel(c *gc.C) {
@@ -152,7 +154,7 @@ func (s *SubnetSuite) addTwoSubnetsInDifferentModelsAndAssertSecondFailsWithSuff
 	_, err := otherState.AddSubnet(info1)
 	c.Assert(err, jc.ErrorIsNil)
 
-	s.assertAddSubnetForInfoFailsWithSuffix(c, info2, errorSuffix)
+	_ = s.assertAddSubnetForInfoFailsWithSuffix(c, info2, errorSuffix)
 }
 
 func (s *SubnetSuite) TestAddSubnetSucceedsWhenProviderIdNotUniqueInDifferentModels(c *gc.C) {
@@ -329,11 +331,11 @@ func (s *SubnetSuite) TestUpdateMAASUndefinedSpace(c *gc.C) {
 	subnetInfo := network.SubnetInfo{CIDR: "8.8.8.0/24"}
 	subnet, err := s.State.AddSubnet(subnetInfo)
 	c.Assert(err, jc.ErrorIsNil)
-	_, err = s.State.AddSpace(names.NewSpaceTag("undefined").Id(), network.Id("-1"), []string{subnet.ID()}, false)
+	_, err = s.State.AddSpace(names.NewSpaceTag("undefined").Id(), "-1", []string{subnet.ID()}, false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	subnetInfo.SpaceName = "testme"
-	_, err = s.State.AddSpace(names.NewSpaceTag(subnetInfo.SpaceName).Id(), network.Id("2"), []string{}, false)
+	_, err = s.State.AddSpace(names.NewSpaceTag(subnetInfo.SpaceName).Id(), "2", []string{}, false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	err = subnet.Update(subnetInfo)
@@ -352,7 +354,7 @@ func (s *SubnetSuite) TestUpdateEmpty(c *gc.C) {
 	subnetInfo.VLANTag = 76
 	subnetInfo.AvailabilityZones = []string{"testme-az"}
 	subnetInfo.SpaceName = "testme"
-	_, err = s.State.AddSpace(names.NewSpaceTag(subnetInfo.SpaceName).Id(), network.Id("2"), []string{}, false)
+	_, err = s.State.AddSpace(names.NewSpaceTag(subnetInfo.SpaceName).Id(), "2", []string{}, false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	err = subnet.Update(subnetInfo)
@@ -366,10 +368,12 @@ func (s *SubnetSuite) TestUpdateEmpty(c *gc.C) {
 }
 
 func (s *SubnetSuite) TestUpdateNonEmpty(c *gc.C) {
-	expectedSubnetInfo := network.SubnetInfo{CIDR: "8.8.8.0/24", VLANTag: 42, AvailabilityZones: []string{"changeme-az", "testme-az"}}
+	expectedSubnetInfo := network.SubnetInfo{
+		CIDR: "8.8.8.0/24", VLANTag: 42, AvailabilityZones: []string{"changeme-az", "testme-az"}}
 	subnet, err := s.State.AddSubnet(expectedSubnetInfo)
 	c.Assert(err, jc.ErrorIsNil)
-	expectedSpace, err := s.State.AddSpace("changeme", network.Id("2"), []string{subnet.ID()}, false)
+
+	expectedSpace, err := s.State.AddSpace("changeme", "2", []string{subnet.ID()}, false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	newSubnetInfo := network.SubnetInfo{
@@ -378,7 +382,7 @@ func (s *SubnetSuite) TestUpdateNonEmpty(c *gc.C) {
 		VLANTag:           76,
 		AvailabilityZones: []string{"testme-az"},
 	}
-	_, err = s.State.AddSpace(names.NewSpaceTag(newSubnetInfo.SpaceName).Id(), network.Id("7"), []string{}, false)
+	_, err = s.State.AddSpace(names.NewSpaceTag(newSubnetInfo.SpaceName).Id(), "7", []string{}, false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	err = subnet.Update(newSubnetInfo)
@@ -389,4 +393,63 @@ func (s *SubnetSuite) TestUpdateNonEmpty(c *gc.C) {
 	c.Assert(subnet.SpaceID(), gc.Equals, expectedSpace.Id())
 	c.Assert(subnet.VLANTag(), gc.Equals, expectedSubnetInfo.VLANTag)
 	c.Assert(subnet.AvailabilityZones(), gc.DeepEquals, expectedSubnetInfo.AvailabilityZones)
+}
+
+func (s *SubnetSuite) TestUniqueAdditionAndRetrievalByCIDR(c *gc.C) {
+	cidr := "1.1.1.1/24"
+
+	sub1 := network.SubnetInfo{
+		CIDR:              cidr,
+		ProviderId:        "1",
+		ProviderNetworkId: "1",
+	}
+	_, err := s.State.AddSubnet(sub1)
+	c.Assert(err, jc.ErrorIsNil)
+
+	sub2 := network.SubnetInfo{
+		CIDR:              cidr,
+		ProviderId:        "2",
+		ProviderNetworkId: "2",
+	}
+	_, err = s.State.AddSubnet(sub2)
+	c.Assert(err, jc.ErrorIsNil)
+
+	subs, err := s.State.SubnetsByCIDR(cidr)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(subs, gc.HasLen, 2)
+
+	_, err = s.State.SubnetByCIDR(cidr)
+	c.Check(err, gc.ErrorMatches, fmt.Sprintf("multiple subnets matching %q", cidr))
+}
+
+func (s *SubnetSuite) TestUpdateSpaceOps(c *gc.C) {
+	space, err := s.State.AddSpace("space-0", "0", []string{}, false)
+	c.Assert(err, jc.ErrorIsNil)
+
+	arg := network.SubnetInfo{
+		CIDR:              "10.10.10.0/24",
+		ProviderId:        "1",
+		ProviderNetworkId: "1",
+		SpaceID:           space.Id(),
+	}
+
+	sub, err := s.State.AddSubnet(arg)
+	c.Assert(err, jc.ErrorIsNil)
+
+	c.Check(sub.UpdateSpaceOps(space.Id()), gc.IsNil)
+
+	ops := sub.UpdateSpaceOps("666")
+	c.Assert(ops, gc.HasLen, 2)
+	for _, op := range ops {
+		if op.C == "spaces" {
+			c.Check(op.Id, gc.Equals, fmt.Sprintf("%s:666", s.State.ModelUUID()))
+			c.Check(op.Assert, gc.DeepEquals, txn.DocExists)
+		} else if op.C == "subnets" {
+			c.Check(op.Id, gc.Equals, fmt.Sprintf("%s:%s", s.State.ModelUUID(), sub.ID()))
+			c.Check(op.Update, gc.DeepEquals, bson.D{{"$set", bson.D{{"space-id", "666"}}}})
+			c.Check(op.Assert, gc.DeepEquals, bson.D{{"life", state.Alive}})
+		} else {
+			c.Fatalf("unexpected txn.Op collection: %q", op.C)
+		}
+	}
 }

@@ -27,7 +27,6 @@ import (
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/mongo"
 	"github.com/juju/juju/network"
-	"github.com/juju/juju/state/presence"
 	"github.com/juju/juju/tools"
 )
 
@@ -274,6 +273,63 @@ func getInstanceData(st *State, id string) (instanceData, error) {
 		return instanceData{}, fmt.Errorf("cannot get instance data for machine %v: %v", id, err)
 	}
 	return instData, nil
+}
+
+// AllInstanceData retrieves all instance data in the model
+// and provides a way to query hardware characteristics and
+// charm profiles by machine.
+func (m *Model) AllInstanceData() (*ModelInstanceData, error) {
+	coll, closer := m.st.db().GetCollection(instanceDataC)
+	defer closer()
+
+	var docs []instanceData
+	err := coll.Find(nil).All(&docs)
+	if err != nil {
+		return nil, errors.Annotate(err, "cannot get all instance data for model")
+	}
+	all := &ModelInstanceData{
+		data: make(map[string]instanceData),
+	}
+	for _, doc := range docs {
+		all.data[doc.MachineId] = doc
+	}
+	return all, nil
+}
+
+// ModelInstanceData represents all the instance data for a model
+// keyed on machine ID.
+type ModelInstanceData struct {
+	data map[string]instanceData
+}
+
+// HardwareCharacteristics returns the hardware characteristics of the
+// machine. If it isn't found in the map, a nil is returned.
+func (d *ModelInstanceData) HardwareCharacteristics(machineID string) *instance.HardwareCharacteristics {
+	instData, found := d.data[machineID]
+	if !found {
+		return nil
+	}
+	return hardwareCharacteristics(instData)
+}
+
+// CharmProfiles returns the names of the profiles that are defined for
+// the machine. If the machine isn't found in the map, a nil is returned.
+func (d *ModelInstanceData) CharmProfiles(machineID string) []string {
+	instData, found := d.data[machineID]
+	if !found {
+		return nil
+	}
+	return instData.CharmProfiles
+}
+
+// InstanceNames returns both the provider instance id and the user
+// friendly name. If the machine isn't found, empty strings are returned.
+func (d *ModelInstanceData) InstanceNames(machineID string) (instance.Id, string) {
+	instData, found := d.data[machineID]
+	if !found {
+		return "", ""
+	}
+	return instData.InstanceId, instData.DisplayName
 }
 
 // Tag returns a tag identifying the machine. The String method provides a
@@ -1076,66 +1132,6 @@ func (m *Machine) Refresh() error {
 	return nil
 }
 
-// AgentPresence returns whether the respective remote agent is alive.
-func (m *Machine) AgentPresence() (bool, error) {
-	pwatcher := m.st.workers.presenceWatcher()
-	return pwatcher.Alive(m.globalKey())
-}
-
-// WaitAgentPresence blocks until the respective agent is alive.
-// This should really only be used in the test suite.
-func (m *Machine) WaitAgentPresence(timeout time.Duration) (err error) {
-	defer errors.DeferredAnnotatef(&err, "waiting for agent of machine %v", m)
-	ch := make(chan presence.Change)
-	pwatcher := m.st.workers.presenceWatcher()
-	pwatcher.Watch(m.globalKey(), ch)
-	defer pwatcher.Unwatch(m.globalKey(), ch)
-	pingBatcher := m.st.getPingBatcher()
-	if err := pingBatcher.Sync(); err != nil {
-		return err
-	}
-	for i := 0; i < 2; i++ {
-		select {
-		case change := <-ch:
-			if change.Alive {
-				return nil
-			}
-		case <-time.After(timeout):
-			// TODO(fwereade): 2016-03-17 lp:1558657
-			return fmt.Errorf("still not alive after timeout")
-		case <-pwatcher.Dead():
-			return pwatcher.Err()
-		}
-	}
-	panic(fmt.Sprintf("presence reported dead status twice in a row for machine %v", m))
-}
-
-// SetAgentPresence signals that the agent for machine m is alive.
-// It returns the started pinger.
-func (m *Machine) SetAgentPresence() (*presence.Pinger, error) {
-	presenceCollection := m.st.getPresenceCollection()
-	recorder := m.st.getPingBatcher()
-	p := presence.NewPinger(presenceCollection, m.st.modelTag, m.globalKey(),
-		func() presence.PingRecorder { return m.st.getPingBatcher() })
-	err := p.Start()
-	if err != nil {
-		return nil, err
-	}
-	// Make sure this Agent status is written to the database before returning.
-	recorder.Sync()
-	// We preform a manual sync here so that the
-	// presence pinger has the most up-to-date information when it
-	// starts. This ensures that commands run immediately after bootstrap
-	// like status or enable-ha will have an accurate values
-	// for agent-state.
-	//
-	// TODO: Does not work for multiple controllers. Trigger a sync across all controllers.
-	if m.IsManager() {
-		m.st.workers.presenceWatcher().Sync()
-	}
-	return p, nil
-}
-
 // InstanceId returns the provider specific instance id for this
 // machine, or a NotProvisionedError, if not set.
 func (m *Machine) InstanceId() (instance.Id, error) {
@@ -1267,14 +1263,6 @@ func (m *Machine) Units() (units []*Unit, err error) {
 	}
 	for _, pudoc := range pudocs {
 		units = append(units, newUnit(m.st, model.Type(), &pudoc))
-		docs := []unitDoc{}
-		err = unitsCollection.Find(bson.D{{"principal", pudoc.Name}}).All(&docs)
-		if err != nil {
-			return nil, err
-		}
-		for _, doc := range docs {
-			units = append(units, newUnit(m.st, model.Type(), &doc))
-		}
 	}
 	return units, nil
 }

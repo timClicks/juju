@@ -6,6 +6,7 @@ package commands
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"strings"
@@ -105,7 +106,7 @@ func (m main) Run(args []string) int {
 
 	// note that this has to come before we init the juju home directory,
 	// since it relies on detecting the lack of said directory.
-	newInstall := m.maybeWarnJuju1x()
+	newInstall, jujuMsg := m.maybeWarnJuju1x()
 
 	if err = juju.InitJujuXDGDataHome(); err != nil {
 		cmd.WriteError(ctx.Stderr, err)
@@ -118,11 +119,13 @@ func (m main) Run(args []string) int {
 	}
 
 	if newInstall {
-		fmt.Fprintf(ctx.Stderr, "Since Juju %v is being run for the first time, downloading latest cloud information.\n", jujuversion.Current.Major)
-		updateCmd := cloud.NewUpdatePublicCloudsCommand()
-		if err := updateCmd.Run(ctx); err != nil {
+		if _, _, err := cloud.FetchAndMaybeUpdatePublicClouds(cloud.PublicCloudsAccess(), true); err != nil {
 			cmd.WriteError(ctx.Stderr, err)
 		}
+		if jujuMsg != "" {
+			jujuMsg += "\n"
+		}
+		jujuMsg += fmt.Sprintf("Since Juju %v is being run for the first time, downloaded the latest public cloud information.\n", jujuversion.Current.Major)
 	}
 
 	for i := range x {
@@ -139,7 +142,7 @@ func (m main) Run(args []string) int {
 		}
 	}
 
-	jcmd := NewJujuCommand(ctx)
+	jcmd := NewJujuCommand(ctx, jujuMsg)
 	return cmd.Main(jcmd, ctx, args[1:])
 }
 
@@ -155,15 +158,16 @@ func installProxy() error {
 	return nil
 }
 
-func (m main) maybeWarnJuju1x() (newInstall bool) {
+func (m main) maybeWarnJuju1x() (newInstall bool, jujuMsg string) {
 	newInstall = !juju2xConfigDataExists()
 	if !shouldWarnJuju1x() {
-		return newInstall
+		return
 	}
 	ver, exists := m.juju1xVersion()
 	if !exists {
-		return newInstall
+		return
 	}
+
 	// TODO (anastasiamac 2016-10-21) Once manual page exists as per
 	// https://github.com/juju/docs/issues/1487,
 	// link it in the Note below to avoid propose here.
@@ -181,8 +185,8 @@ If you want to use Juju {{.OldJujuVersion}}, run 'juju' commands as '{{.OldJujuC
 		"OldJujuVersion":     ver,
 		"OldJujuCommand":     juju1xCmdName,
 	})
-	fmt.Fprintln(os.Stderr, buf.String())
-	return newInstall
+	jujuMsg = buf.String()
+	return
 }
 
 func (m main) juju1xVersion() (ver string, exists bool) {
@@ -217,7 +221,7 @@ func juju2xConfigDataExists() bool {
 }
 
 // NewJujuCommand ...
-func NewJujuCommand(ctx *cmd.Context) cmd.Command {
+func NewJujuCommand(ctx *cmd.Context, jujuMsg string) cmd.Command {
 	var jcmd *cmd.SuperCommand
 	jcmd = jujucmd.NewSuperCommand(cmd.SuperCommandParams{
 		Name: "juju",
@@ -233,6 +237,11 @@ func NewJujuCommand(ctx *cmd.Context) cmd.Command {
 		}),
 		UserAliasesFilename: osenv.JujuXDGDataHomePath("aliases"),
 		FlagKnownAs:         "option",
+		NotifyRun: func(string) {
+			if jujuMsg != "" {
+				ctx.Infof(jujuMsg)
+			}
+		},
 	})
 	registerCommands(jcmd, ctx)
 	return jcmd
@@ -304,6 +313,7 @@ func registerCommands(r commandRegistry, ctx *cmd.Context) {
 	r.Register(application.NewResolvedCommand())
 	r.Register(newDebugLogCommand(nil))
 	r.Register(newDebugHooksCommand(nil))
+	r.Register(newDebugCodeCommand(nil))
 
 	// Configuration commands.
 	r.Register(model.NewModelGetConstraintsCommand())
@@ -437,21 +447,15 @@ func registerCommands(r commandRegistry, ctx *cmd.Context) {
 	// Manage spaces
 	r.Register(space.NewAddCommand())
 	r.Register(space.NewListCommand())
+	r.Register(space.NewMoveCommand())
 	r.Register(space.NewReloadCommand())
 	r.Register(space.NewShowSpaceCommand())
 	r.Register(space.NewRemoveCommand())
 	r.Register(space.NewRenameCommand())
-	if featureflag.Enabled(feature.PostNetCLIMVP) {
-		r.Register(space.NewUpdateCommand())
-	}
 
 	// Manage subnets
 	r.Register(subnet.NewAddCommand())
 	r.Register(subnet.NewListCommand())
-	if featureflag.Enabled(feature.PostNetCLIMVP) {
-		r.Register(subnet.NewCreateCommand())
-		r.Register(subnet.NewRemoveCommand())
-	}
 
 	// Manage controllers
 	r.Register(controller.NewAddModelCommand())
@@ -491,6 +495,7 @@ func registerCommands(r commandRegistry, ctx *cmd.Context) {
 
 	// CAAS commands
 	r.Register(caas.NewAddCAASCommand(&cloudToCommandAdapter{}))
+	r.Register(caas.NewUpdateCAASCommand(&cloudToCommandAdapter{}))
 	r.Register(caas.NewRemoveCAASCommand(&cloudToCommandAdapter{}))
 	r.Register(application.NewScaleApplicationCommand())
 
@@ -539,8 +544,8 @@ func registerCommands(r commandRegistry, ctx *cmd.Context) {
 
 type cloudToCommandAdapter struct{}
 
-func (cloudToCommandAdapter) ParseCloudMetadataFile(path string) (map[string]cloudfile.Cloud, error) {
-	return cloudfile.ParseCloudMetadataFile(path)
+func (cloudToCommandAdapter) ReadCloudData(path string) ([]byte, error) {
+	return ioutil.ReadFile(path)
 }
 func (cloudToCommandAdapter) ParseOneCloud(data []byte) (cloudfile.Cloud, error) {
 	return cloudfile.ParseOneCloud(data)

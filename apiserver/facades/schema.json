@@ -5329,6 +5329,143 @@
         }
     },
     {
+        "Name": "CAASAdmission",
+        "Version": 1,
+        "Schema": {
+            "type": "object",
+            "properties": {
+                "ControllerAPIInfoForModels": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/Entities"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/ControllerAPIInfoResults"
+                        }
+                    }
+                },
+                "ControllerConfig": {
+                    "type": "object",
+                    "properties": {
+                        "Result": {
+                            "$ref": "#/definitions/ControllerConfigResult"
+                        }
+                    }
+                }
+            },
+            "definitions": {
+                "ControllerAPIInfoResult": {
+                    "type": "object",
+                    "properties": {
+                        "addresses": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "cacert": {
+                            "type": "string"
+                        },
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "addresses",
+                        "cacert"
+                    ]
+                },
+                "ControllerAPIInfoResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/ControllerAPIInfoResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
+                },
+                "ControllerConfigResult": {
+                    "type": "object",
+                    "properties": {
+                        "config": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "config"
+                    ]
+                },
+                "Entities": {
+                    "type": "object",
+                    "properties": {
+                        "entities": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/Entity"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "entities"
+                    ]
+                },
+                "Entity": {
+                    "type": "object",
+                    "properties": {
+                        "tag": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "tag"
+                    ]
+                },
+                "Error": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string"
+                        },
+                        "info": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }
+                            }
+                        },
+                        "message": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "message",
+                        "code"
+                    ]
+                }
+            }
+        }
+    },
+    {
         "Name": "CAASAgent",
         "Version": 1,
         "Schema": {
@@ -6112,6 +6249,9 @@
                         "charm-modified-version": {
                             "type": "integer"
                         },
+                        "deployment-mode": {
+                            "type": "string"
+                        },
                         "force-upgrade": {
                             "type": "boolean"
                         },
@@ -6690,8 +6830,11 @@
                 "OperatorProvisioningInfo": {
                     "type": "object",
                     "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/Entities"
+                        },
                         "Result": {
-                            "$ref": "#/definitions/OperatorProvisioningInfo"
+                            "$ref": "#/definitions/OperatorProvisioningInfoResults"
                         }
                     }
                 },
@@ -7090,6 +7233,9 @@
                         "charm-storage": {
                             "$ref": "#/definitions/KubernetesFilesystemParams"
                         },
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
                         "image-path": {
                             "type": "string"
                         },
@@ -7109,8 +7255,22 @@
                     "required": [
                         "image-path",
                         "version",
-                        "api-addresses",
-                        "charm-storage"
+                        "api-addresses"
+                    ]
+                },
+                "OperatorProvisioningInfoResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/OperatorProvisioningInfo"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
                     ]
                 },
                 "StringResult": {
@@ -7292,6 +7452,17 @@
                         },
                         "Result": {
                             "$ref": "#/definitions/IntResults"
+                        }
+                    }
+                },
+                "DeploymentMode": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/Entities"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/StringResults"
                         }
                     }
                 },
@@ -7856,6 +8027,9 @@
                         "pod-spec": {
                             "type": "string"
                         },
+                        "raw-k8s-spec": {
+                            "type": "string"
+                        },
                         "tags": {
                             "type": "object",
                             "patternProperties": {
@@ -8075,6 +8249,36 @@
                     "additionalProperties": false,
                     "required": [
                         "entities"
+                    ]
+                },
+                "StringResult": {
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
+                        "result": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "result"
+                    ]
+                },
+                "StringResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/StringResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
                     ]
                 },
                 "StringsWatchResult": {
@@ -21418,7 +21622,7 @@
     },
     {
         "Name": "MeterStatus",
-        "Version": 1,
+        "Version": 2,
         "Schema": {
             "type": "object",
             "properties": {
@@ -21430,6 +21634,28 @@
                         },
                         "Result": {
                             "$ref": "#/definitions/MeterStatusResults"
+                        }
+                    }
+                },
+                "SetState": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/SetUnitStateArgs"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/ErrorResults"
+                        }
+                    }
+                },
+                "State": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/Entities"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/UnitStateResults"
                         }
                     }
                 },
@@ -21498,6 +21724,30 @@
                         "code"
                     ]
                 },
+                "ErrorResult": {
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "ErrorResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/ErrorResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
+                },
                 "MeterStatusResult": {
                     "type": "object",
                     "properties": {
@@ -21554,6 +21804,107 @@
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/NotifyWatchResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
+                },
+                "SetUnitStateArg": {
+                    "type": "object",
+                    "properties": {
+                        "charm-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "meter-status-state": {
+                            "type": "string"
+                        },
+                        "relation-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "storage-state": {
+                            "type": "string"
+                        },
+                        "tag": {
+                            "type": "string"
+                        },
+                        "uniter-state": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "tag"
+                    ]
+                },
+                "SetUnitStateArgs": {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/SetUnitStateArg"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "args"
+                    ]
+                },
+                "UnitStateResult": {
+                    "type": "object",
+                    "properties": {
+                        "charm-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
+                        "meter-status-state": {
+                            "type": "string"
+                        },
+                        "relation-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "storage-state": {
+                            "type": "string"
+                        },
+                        "uniter-state": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "UnitStateResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/UnitStateResult"
                             }
                         }
                     },
@@ -31148,6 +31499,17 @@
                         }
                     }
                 },
+                "MoveSubnets": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/MoveSubnetsParams"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/MoveSubnetsResults"
+                        }
+                    }
+                },
                 "ReloadSpaces": {
                     "type": "object"
                 },
@@ -31318,6 +31680,100 @@
                         "results"
                     ]
                 },
+                "MoveSubnetsParam": {
+                    "type": "object",
+                    "properties": {
+                        "force": {
+                            "type": "boolean"
+                        },
+                        "space-tag": {
+                            "type": "string"
+                        },
+                        "subnets": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "subnets",
+                        "space-tag",
+                        "force"
+                    ]
+                },
+                "MoveSubnetsParams": {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/MoveSubnetsParam"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "args"
+                    ]
+                },
+                "MoveSubnetsResult": {
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
+                        "moved-subnets": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/MovedSubnet"
+                            }
+                        },
+                        "new-space": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "new-space"
+                    ]
+                },
+                "MoveSubnetsResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/MoveSubnetsResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
+                },
+                "MovedSubnet": {
+                    "type": "object",
+                    "properties": {
+                        "cidr": {
+                            "type": "string"
+                        },
+                        "old-space": {
+                            "type": "string"
+                        },
+                        "subnet": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "subnet",
+                        "old-space",
+                        "cidr"
+                    ]
+                },
                 "RemoveSpaceParam": {
                     "type": "object",
                     "properties": {
@@ -31412,7 +31868,7 @@
                 "RenameSpacesParams": {
                     "type": "object",
                     "properties": {
-                        "rename-spaces": {
+                        "changes": {
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/RenameSpaceParams"
@@ -31421,7 +31877,7 @@
                     },
                     "additionalProperties": false,
                     "required": [
-                        "rename-spaces"
+                        "changes"
                     ]
                 },
                 "ShowSpaceResult": {
@@ -34378,7 +34834,7 @@
     },
     {
         "Name": "Subnets",
-        "Version": 3,
+        "Version": 4,
         "Schema": {
             "type": "object",
             "properties": {
@@ -34390,14 +34846,6 @@
                         },
                         "Result": {
                             "$ref": "#/definitions/ErrorResults"
-                        }
-                    }
-                },
-                "AllSpaces": {
-                    "type": "object",
-                    "properties": {
-                        "Result": {
-                            "$ref": "#/definitions/SpaceResults"
                         }
                     }
                 },
@@ -34417,6 +34865,17 @@
                         },
                         "Result": {
                             "$ref": "#/definitions/ListSubnetsResults"
+                        }
+                    }
+                },
+                "SubnetsByCIDR": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/CIDRParams"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/SubnetsResults"
                         }
                     }
                 }
@@ -34465,6 +34924,21 @@
                     "additionalProperties": false,
                     "required": [
                         "subnets"
+                    ]
+                },
+                "CIDRParams": {
+                    "type": "object",
+                    "properties": {
+                        "cidrs": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "cidrs"
                     ]
                 },
                 "Error": {
@@ -34531,36 +35005,6 @@
                         "results"
                     ]
                 },
-                "SpaceResult": {
-                    "type": "object",
-                    "properties": {
-                        "error": {
-                            "$ref": "#/definitions/Error"
-                        },
-                        "tag": {
-                            "type": "string"
-                        }
-                    },
-                    "additionalProperties": false,
-                    "required": [
-                        "tag"
-                    ]
-                },
-                "SpaceResults": {
-                    "type": "object",
-                    "properties": {
-                        "results": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/SpaceResult"
-                            }
-                        }
-                    },
-                    "additionalProperties": false,
-                    "required": [
-                        "results"
-                    ]
-                },
                 "Subnet": {
                     "type": "object",
                     "properties": {
@@ -34604,6 +35048,56 @@
                         "zones"
                     ]
                 },
+                "SubnetV2": {
+                    "type": "object",
+                    "properties": {
+                        "Subnet": {
+                            "$ref": "#/definitions/Subnet"
+                        },
+                        "cidr": {
+                            "type": "string"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "life": {
+                            "type": "string"
+                        },
+                        "provider-id": {
+                            "type": "string"
+                        },
+                        "provider-network-id": {
+                            "type": "string"
+                        },
+                        "provider-space-id": {
+                            "type": "string"
+                        },
+                        "space-tag": {
+                            "type": "string"
+                        },
+                        "status": {
+                            "type": "string"
+                        },
+                        "vlan-tag": {
+                            "type": "integer"
+                        },
+                        "zones": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "cidr",
+                        "vlan-tag",
+                        "life",
+                        "space-tag",
+                        "zones",
+                        "Subnet"
+                    ]
+                },
                 "SubnetsFilters": {
                     "type": "object",
                     "properties": {
@@ -34615,6 +35109,36 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "SubnetsResult": {
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
+                        "subnets": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/SubnetV2"
+                            }
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "SubnetsResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/SubnetsResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
                 },
                 "ZoneResult": {
                     "type": "object",
@@ -35409,6 +35933,17 @@
                         }
                     }
                 },
+                "GetRawK8sSpec": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/Entities"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/StringResults"
+                        }
+                    }
+                },
                 "GoalStates": {
                     "type": "object",
                     "properties": {
@@ -35699,6 +36234,17 @@
                     "properties": {
                         "Params": {
                             "$ref": "#/definitions/RelationStatusArgs"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/ErrorResults"
+                        }
+                    }
+                },
+                "SetState": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/SetUnitStateArgs"
                         },
                         "Result": {
                             "$ref": "#/definitions/ErrorResults"
@@ -36432,6 +36978,9 @@
                             "items": {
                                 "$ref": "#/definitions/RelationUnitSettings"
                             }
+                        },
+                        "set-raw-k8s-spec": {
+                            "$ref": "#/definitions/PodSpec"
                         },
                         "tag": {
                             "type": "string"
@@ -37758,7 +38307,7 @@
                 "SetUnitStateArg": {
                     "type": "object",
                     "properties": {
-                        "state": {
+                        "charm-state": {
                             "type": "object",
                             "patternProperties": {
                                 ".*": {
@@ -37766,14 +38315,45 @@
                                 }
                             }
                         },
+                        "meter-status-state": {
+                            "type": "string"
+                        },
+                        "relation-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "storage-state": {
+                            "type": "string"
+                        },
                         "tag": {
+                            "type": "string"
+                        },
+                        "uniter-state": {
                             "type": "string"
                         }
                     },
                     "additionalProperties": false,
                     "required": [
-                        "tag",
-                        "state"
+                        "tag"
+                    ]
+                },
+                "SetUnitStateArgs": {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/SetUnitStateArg"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "args"
                     ]
                 },
                 "SettingsResult": {
@@ -38203,22 +38783,36 @@
                 "UnitStateResult": {
                     "type": "object",
                     "properties": {
-                        "error": {
-                            "$ref": "#/definitions/Error"
-                        },
-                        "state": {
+                        "charm-state": {
                             "type": "object",
                             "patternProperties": {
                                 ".*": {
                                     "type": "string"
                                 }
                             }
+                        },
+                        "error": {
+                            "$ref": "#/definitions/Error"
+                        },
+                        "meter-status-state": {
+                            "type": "string"
+                        },
+                        "relation-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "storage-state": {
+                            "type": "string"
+                        },
+                        "uniter-state": {
+                            "type": "string"
                         }
                     },
-                    "additionalProperties": false,
-                    "required": [
-                        "state"
-                    ]
+                    "additionalProperties": false
                 },
                 "UnitStateResults": {
                     "type": "object",
@@ -38773,7 +39367,7 @@
     },
     {
         "Name": "UpgradeSteps",
-        "Version": 1,
+        "Version": 2,
         "Schema": {
             "type": "object",
             "properties": {
@@ -38785,6 +39379,17 @@
                         },
                         "Result": {
                             "$ref": "#/definitions/ErrorResult"
+                        }
+                    }
+                },
+                "WriteAgentState": {
+                    "type": "object",
+                    "properties": {
+                        "Params": {
+                            "$ref": "#/definitions/SetUnitStateArgs"
+                        },
+                        "Result": {
+                            "$ref": "#/definitions/ErrorResults"
                         }
                     }
                 }
@@ -38835,6 +39440,73 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "ErrorResults": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/ErrorResult"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "results"
+                    ]
+                },
+                "SetUnitStateArg": {
+                    "type": "object",
+                    "properties": {
+                        "charm-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "meter-status-state": {
+                            "type": "string"
+                        },
+                        "relation-state": {
+                            "type": "object",
+                            "patternProperties": {
+                                ".*": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "storage-state": {
+                            "type": "string"
+                        },
+                        "tag": {
+                            "type": "string"
+                        },
+                        "uniter-state": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "tag"
+                    ]
+                },
+                "SetUnitStateArgs": {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/SetUnitStateArg"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "args"
+                    ]
                 }
             }
         }

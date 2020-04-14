@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
@@ -33,7 +32,6 @@ import (
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/status"
 	mgoutils "github.com/juju/juju/mongo/utils"
-	"github.com/juju/juju/state/presence"
 	"github.com/juju/juju/tools"
 )
 
@@ -1245,9 +1243,14 @@ func (a *Application) SetCharm(cfg SetCharmConfig) (err error) {
 		return errors.Trace(err)
 	}
 	if cfg.Charm.Meta().Deployment != currentCharm.Meta().Deployment {
-		if currentCharm.Meta().Deployment == nil ||
-			cfg.Charm.Meta().Deployment.DeploymentType != currentCharm.Meta().Deployment.DeploymentType {
+		if currentCharm.Meta().Deployment == nil || currentCharm.Meta().Deployment == nil {
+			return errors.New("cannot change a charm's deployment info")
+		}
+		if cfg.Charm.Meta().Deployment.DeploymentType != currentCharm.Meta().Deployment.DeploymentType {
 			return errors.New("cannot change a charm's deployment type")
+		}
+		if cfg.Charm.Meta().Deployment.DeploymentMode != currentCharm.Meta().Deployment.DeploymentMode {
+			return errors.New("cannot change a charm's deployment mode")
 		}
 	}
 	// For old style charms written for only one series, we still retain
@@ -1735,19 +1738,23 @@ func (a *Application) addUnitOps(
 		if err != nil {
 			return "", nil, errors.Trace(err)
 		}
+		if args.machineID != "" {
+			return "", nil, errors.NotSupportedf("non-empty machineID")
+		}
 	}
 	storageCons, err := a.StorageConstraints()
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
 	uNames, ops, err := a.addUnitOpsWithCons(applicationAddUnitOpsArgs{
-		cons:          cons,
-		principalName: principalName,
-		storageCons:   storageCons,
-		attachStorage: args.AttachStorage,
-		providerId:    args.ProviderId,
-		address:       args.Address,
-		ports:         args.Ports,
+		cons:               cons,
+		principalName:      principalName,
+		principalMachineID: args.machineID,
+		storageCons:        storageCons,
+		attachStorage:      args.AttachStorage,
+		providerId:         args.ProviderId,
+		address:            args.Address,
+		ports:              args.Ports,
 	})
 	if err != nil {
 		return uNames, ops, errors.Trace(err)
@@ -1759,7 +1766,9 @@ func (a *Application) addUnitOps(
 }
 
 type applicationAddUnitOpsArgs struct {
-	principalName string
+	principalName      string
+	principalMachineID string
+
 	cons          constraints.Value
 	storageCons   map[string]StorageConstraints
 	attachStorage []names.StorageTag
@@ -1814,6 +1823,7 @@ func (a *Application) addUnitOpsWithCons(args applicationAddUnitOpsArgs) (string
 		Series:                 a.doc.Series,
 		Life:                   Alive,
 		Principal:              args.principalName,
+		MachineId:              args.principalMachineID,
 		StorageAttachmentCount: numStorageAttachments,
 	}
 	now := a.st.clock().Now()
@@ -2060,6 +2070,10 @@ type AddUnitParams struct {
 
 	// Ports are the open ports on the container.
 	Ports *[]string
+
+	// machineID is only passed in if the unit being created is
+	// a subordinate and refers to the machine that is hosting the principal.
+	machineID string
 }
 
 // AddUnit adds a new principal unit to the application.
@@ -2632,11 +2646,8 @@ func (a *Application) Status() (status.StatusInfo, error) {
 	return getStatus(a.st.db(), a.globalKey(), "application")
 }
 
-func expectWorkload(st *State, appName string) (bool, error) {
-	m, err := st.Model()
-	if err != nil {
-		return false, errors.Trace(err)
-	}
+// CheckApplicationExpectsWorkload checks if the application expects workload or not.
+func CheckApplicationExpectsWorkload(m *Model, appName string) (bool, error) {
 	cm, err := m.CAASModel()
 	if err != nil {
 		// IAAS models alway have a unit workload.
@@ -2664,7 +2675,7 @@ func (a *Application) SetStatus(statusInfo status.StatusInfo) error {
 		// Application status for a caas model needs to consider status
 		// info coming from the operator pod as well; It may need to
 		// override what is set here.
-		expectWorkload, err := expectWorkload(a.st, a.Name())
+		expectWorkload, err := CheckApplicationExpectsWorkload(m, a.Name())
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -2716,7 +2727,7 @@ func (a *Application) SetOperatorStatus(sInfo status.StatusInfo) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	expectWorkload, err := expectWorkload(a.st, a.Name())
+	expectWorkload, err := CheckApplicationExpectsWorkload(m, a.Name())
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -3086,60 +3097,6 @@ func (op *AddUnitOperation) Done(err error) error {
 	}
 
 	return nil
-}
-
-// AgentPresence returns whether the respective remote agent is alive.
-func (a *Application) AgentPresence() (bool, error) {
-	pwatcher := a.st.workers.presenceWatcher()
-	return pwatcher.Alive(a.globalKey())
-}
-
-// WaitAgentPresence blocks until the respective agent is alive.
-// This should really only be used in the test suite.
-func (a *Application) WaitAgentPresence(timeout time.Duration) (err error) {
-	defer errors.DeferredAnnotatef(&err, "waiting for agent of application %q", a)
-	ch := make(chan presence.Change)
-	pwatcher := a.st.workers.presenceWatcher()
-	pwatcher.Watch(a.globalKey(), ch)
-	defer pwatcher.Unwatch(a.globalKey(), ch)
-	pingBatcher := a.st.getPingBatcher()
-	if err := pingBatcher.Sync(); err != nil {
-		return err
-	}
-	for i := 0; i < 2; i++ {
-		select {
-		case change := <-ch:
-			if change.Alive {
-				return nil
-			}
-		case <-time.After(timeout):
-			// TODO(fwereade): 2016-03-17 lp:1558657
-			return fmt.Errorf("still not alive after timeout")
-		case <-pwatcher.Dead():
-			return pwatcher.Err()
-		}
-	}
-	panic(fmt.Sprintf("presence reported dead status twice in a row for application %q", a))
-}
-
-// SetAgentPresence signals that the agent for application a is alive.
-// It returns the started pinger.
-func (a *Application) SetAgentPresence() (*presence.Pinger, error) {
-	presenceCollection := a.st.getPresenceCollection()
-	recorder := a.st.getPingBatcher()
-	m, err := a.st.Model()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	p := presence.NewPinger(presenceCollection, m.ModelTag(), a.globalKey(),
-		func() presence.PingRecorder { return a.st.getPingBatcher() })
-	err = p.Start()
-	if err != nil {
-		return nil, err
-	}
-	// Make sure this Agent status is written to the database before returning.
-	recorder.Sync()
-	return p, nil
 }
 
 // UpdateCloudService updates the cloud service details for the application.

@@ -10,6 +10,8 @@ import (
 	"gopkg.in/juju/worker.v1/dependency"
 
 	"github.com/juju/juju/agent"
+	"github.com/juju/juju/apiserver/apiserverhttp"
+	"github.com/juju/juju/pki"
 	jworker "github.com/juju/juju/worker"
 	"github.com/juju/juju/worker/common"
 	workerstate "github.com/juju/juju/worker/state"
@@ -25,8 +27,10 @@ type Logger interface {
 // in a dependency.Engine.
 type ManifoldConfig struct {
 	AgentName      string
+	AuthorityName  string
 	StateName      string
 	Clock          clock.Clock
+	MuxName        string
 	NewWorker      func(Config) (worker.Worker, error)
 	NewModelWorker NewModelWorkerFunc
 	Logger         Logger
@@ -37,8 +41,14 @@ func (config ManifoldConfig) Validate() error {
 	if config.AgentName == "" {
 		return errors.NotValidf("empty AgentName")
 	}
+	if config.AuthorityName == "" {
+		return errors.NotValidf("empty AuthorityName")
+	}
 	if config.StateName == "" {
 		return errors.NotValidf("empty StateName")
+	}
+	if config.MuxName == "" {
+		return errors.NotValidf("emtpy MuxName")
 	}
 	if config.NewWorker == nil {
 		return errors.NotValidf("nil NewWorker")
@@ -55,8 +65,13 @@ func (config ManifoldConfig) Validate() error {
 // Manifold returns a dependency.Manifold that will run a model worker manager.
 func Manifold(config ManifoldConfig) dependency.Manifold {
 	return dependency.Manifold{
-		Inputs: []string{config.AgentName, config.StateName},
-		Start:  config.start,
+		Inputs: []string{
+			config.AgentName,
+			config.AuthorityName,
+			config.MuxName,
+			config.StateName,
+		},
+		Start: config.start,
 	}
 }
 
@@ -67,6 +82,16 @@ func (config ManifoldConfig) start(context dependency.Context) (worker.Worker, e
 	}
 	var agent agent.Agent
 	if err := context.Get(config.AgentName, &agent); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	var authority pki.Authority
+	if err := context.Get(config.AuthorityName, &authority); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	var mux *apiserverhttp.Mux
+	if err := context.Get(config.MuxName, &mux); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -82,10 +107,12 @@ func (config ManifoldConfig) start(context dependency.Context) (worker.Worker, e
 	machineID := agent.CurrentConfig().Tag().Id()
 
 	w, err := config.NewWorker(Config{
+		Authority:      authority,
 		Clock:          config.Clock,
 		Logger:         config.Logger,
 		MachineID:      machineID,
 		ModelWatcher:   statePool.SystemState(),
+		Mux:            mux,
 		Controller:     StatePoolController{statePool},
 		NewModelWorker: config.NewModelWorker,
 		ErrorDelay:     jworker.RestartDelay,

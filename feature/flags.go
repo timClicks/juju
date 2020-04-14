@@ -23,11 +23,6 @@ const LogErrorStack = "log-error-stack"
 // instead of systemd for vivid and newer.
 const LegacyUpstart = "legacy-upstart"
 
-// PostNetCLIMVP is used to indicate that additional networking
-// commands will be available in addition to the networking MVP ones
-// (space list|create, subnet list|add).
-const PostNetCLIMVP = "post-net-cli-mvp"
-
 // ImageMetadata allows custom image metadata to be recorded in state.
 const ImageMetadata = "image-metadata"
 
@@ -37,11 +32,6 @@ const DeveloperMode = "developer-mode"
 // StrictMigration will cause migration to error if there are unexported
 // values for annotations, status, status history, or settings.
 const StrictMigration = "strict-migration"
-
-// OldPresence indicates that the old database presence implementation
-// should be used by the API server to determine agent presence.
-// This value is only checked using the controller config "features" attribute.
-const OldPresence = "old-presence"
 
 // LegacyLeases will switch all lease management to be handled by the
 // Mongo-based lease store, rather than by the Raft FSM.
@@ -58,13 +48,15 @@ const Generations = "generations"
 // it from APT.
 const MongoDbSnap = "mongodb-snap"
 
-// MongoDbSnap tells Juju to use server-side transactions. It does nothing if
+// MongoDbSSTXN tells Juju to use server-side transactions. It does nothing if
 // MongoDbSnap is not also enabled.
 const MongoDbSSTXN = "mongodb-sstxn"
 
-// MultiCloud tells Juju to allow a different IAAS cloud to the one the controller
-// was bootstrapped on to be added to the controller.
-const MultiCloud = "multi-cloud"
-
 // JujuV3 indicates that new CLI commands and behaviour for v3 should be enabled.
 const JujuV3 = "juju-v3"
+
+// K8sOperators indicates that it's allowed to deploy charms with mode=operator
+const K8sOperators = "k8s-operators"
+
+// RawK8sSpec indicates that it's allowed to set k8s spec using raw yaml format.
+const RawK8sSpec = "raw-k8s-spec"

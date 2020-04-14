@@ -1859,7 +1859,7 @@ func UpdateInheritedControllerConfig(pool *StatePool) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	key := cloudGlobalKey(model.Cloud())
+	key := cloudGlobalKey(model.CloudName())
 
 	var ops []txn.Op
 	coll, closer := st.db().GetRawCollection(globalSettingsC)
@@ -1939,7 +1939,7 @@ func updateKubernetesStorageConfig(st *State) error {
 		// longer have settings to update.
 		return nil
 	}
-	cred, ok := model.CloudCredential()
+	cred, ok := model.CloudCredentialTag()
 	if !ok {
 		return nil
 	}
@@ -1948,13 +1948,13 @@ func updateKubernetesStorageConfig(st *State) error {
 		return errors.Trace(err)
 	}
 
-	defaults, err := st.controllerInheritedConfig(model.Cloud())()
+	defaults, err := st.controllerInheritedConfig(model.CloudName())()
 	if err != nil {
 		return errors.Annotate(err, "getting cloud config")
 	}
 	operatorStorage, haveDefaultOperatorStorage := defaults[k8s.OperatorStorageKey]
 	if !haveDefaultOperatorStorage {
-		cloudSpec, err := cloudSpec(st, model.Cloud(), model.CloudRegion(), cred)
+		cloudSpec, err := cloudSpec(st, model.CloudName(), model.CloudRegion(), cred)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -1970,7 +1970,7 @@ func updateKubernetesStorageConfig(st *State) error {
 			return nil
 		}
 		operatorStorage = metadata.NominatedStorageClass.Name
-		err = st.updateConfigDefaults(model.Cloud(), cloud.Attrs{
+		err = st.updateConfigDefaults(model.CloudName(), cloud.Attrs{
 			k8s.OperatorStorageKey: operatorStorage,
 			k8s.WorkloadStorageKey: operatorStorage, // use same storage for both
 		}, nil)
@@ -2847,10 +2847,84 @@ func IncrementTasksSequence(pool *StatePool) error {
 	// a request to get a task id.
 	sequenceColl, closer := st.db().GetRawCollection(sequenceC)
 	defer closer()
-	n, err := sequenceColl.FindId(st.docID("tasks")).Count()
-	if err != nil || n == 0 {
+
+	var seq struct {
+		DocId   string `bson:"_id"`
+		Counter int    `bson:"counter"`
+	}
+	iter := sequenceColl.Find(bson.M{"_id": bson.M{"$regex": ".*:tasks$"}}).Iter()
+	defer iter.Close()
+
+	for iter.Next(&seq) {
+		if err := sequenceColl.UpdateId(seq.DocId, bson.M{
+			"$set": bson.M{"counter": seq.Counter + 1},
+		}); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
+}
+
+// AddMachineIDToSubordinates ensures that the subordinate units
+// have the machine ID set that matches the principal.
+func AddMachineIDToSubordinates(pool *StatePool) error {
+	st := pool.SystemState()
+	coll, closer := st.db().GetRawCollection(unitsC)
+	defer closer()
+
+	// Load all the units into a map by full ID.
+	units := make(map[string]*unitDoc)
+
+	var doc unitDoc
+	iter := coll.Find(nil).Iter()
+	for iter.Next(&doc) {
+		// Make a copy of the unitDoc and put the copy
+		// into the map.
+		unit := doc
+		units[unit.DocID] = &unit
+	}
+	if err := iter.Close(); err != nil {
 		return errors.Trace(err)
 	}
-	_, err = sequence(st, "tasks")
-	return errors.Trace(err)
+
+	// Iterate through he map and find any subordinates.
+	// For the subordinates, look up the principal and get their
+	// machine ID. If there is a machine ID (CAAS models won't have one),
+	// we create and operation to set the machine ID on the subordinate.
+	var ops []txn.Op
+	for _, unit := range units {
+		if unit.Principal == "" {
+			continue
+		}
+		// If we already have a machine id, no need to set one.
+		if unit.MachineId != "" {
+			continue
+		}
+		key := ensureModelUUID(unit.ModelUUID, unit.Principal)
+		principal, found := units[key]
+		if !found {
+			logger.Warningf("principal unit %q not found, how?", key)
+			continue
+		}
+		if principal.MachineId == "" {
+			// Principal has no machine ID, must be a CAAS unit.
+			continue
+		}
+		ops = append(ops, txn.Op{
+			C:      unitsC,
+			Id:     unit.DocID,
+			Update: bson.M{"$set": bson.M{"machineid": principal.MachineId}},
+		})
+	}
+
+	if len(ops) == 0 {
+		return nil
+	}
+	return st.runRawTransaction(ops)
+}
+
+// DropPresenceDatabase removes the legacy presence database.
+func DropPresenceDatabase(pool *StatePool) error {
+	st := pool.SystemState()
+	return st.session.DB("presence").DropDatabase()
 }

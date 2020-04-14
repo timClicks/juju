@@ -418,17 +418,17 @@ func (r *MockRunner) Context() runner.Context {
 	return r.context
 }
 
-func (r *MockRunner) RunAction(actionName string) error {
-	return r.MockRunAction.Call(actionName)
+func (r *MockRunner) RunAction(actionName string) (runner.HookHandlerType, error) {
+	return runner.ExplicitHookHandler, r.MockRunAction.Call(actionName)
 }
 
 func (r *MockRunner) RunCommands(commands string) (*utilexec.ExecResponse, error) {
 	return r.MockRunCommands.Call(commands)
 }
 
-func (r *MockRunner) RunHook(hookName string) error {
+func (r *MockRunner) RunHook(hookName string) (runner.HookHandlerType, error) {
 	r.Context().(*MockContext).setStatusCalled = r.MockRunHook.setStatusCalled
-	return r.MockRunHook.Call(hookName)
+	return runner.ExplicitHookHandler, r.MockRunHook.Call(hookName)
 }
 
 type MockActionWaitRunner struct {
@@ -444,9 +444,9 @@ func (r *MockActionWaitRunner) Context() runner.Context {
 	return r.context
 }
 
-func (r *MockActionWaitRunner) RunAction(actionName string) error {
+func (r *MockActionWaitRunner) RunAction(actionName string) (runner.HookHandlerType, error) {
 	r.actionName = actionName
-	return <-r.actionChan
+	return runner.ExplicitHookHandler, <-r.actionChan
 }
 
 func NewDeployCallbacks() *DeployCallbacks {
@@ -534,11 +534,13 @@ func NewRunHookRunnerFactory(runErr error, contextOps ...func(*MockContext)) *Mo
 type MockSendResponse struct {
 	gotResponse **utilexec.ExecResponse
 	gotErr      *error
+	eatError    bool
 }
 
-func (mock *MockSendResponse) Call(response *utilexec.ExecResponse, err error) {
+func (mock *MockSendResponse) Call(response *utilexec.ExecResponse, err error) bool {
 	mock.gotResponse = &response
 	mock.gotErr = &err
+	return mock.eatError
 }
 
 var curl = corecharm.MustParseURL

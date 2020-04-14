@@ -5,12 +5,14 @@ package specs_test
 
 import (
 	"encoding/base64"
+	"fmt"
 
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 	admissionregistration "k8s.io/api/admissionregistration/v1beta1"
 	core "k8s.io/api/core/v1"
 	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -70,7 +72,7 @@ containers:
       attr: foo=bar; name["fred"]="blogs";
       foo: bar
       brackets: '["hello", "world"]'
-      restricted: 'yes'
+      restricted: "yes"
       switch: on
       special: p@ssword's
       my-resource-limit:
@@ -117,16 +119,16 @@ containers:
   - name: gitlab-helper
     image: gitlab-helper/latest
     ports:
-    - containerPort: 8080
-      protocol: TCP
+      - containerPort: 8080
+        protocol: TCP
   - name: secret-image-user
     imageDetails:
-        imagePath: staging.registry.org/testing/testing-image@sha256:deed-beef
-        username: docker-registry
-        password: hunter2
+      imagePath: staging.registry.org/testing/testing-image@sha256:deed-beef
+      username: docker-registry
+      password: hunter2
   - name: just-image-details
     imageDetails:
-        imagePath: testing/no-secrets-needed@sha256:deed-beef
+      imagePath: testing/no-secrets-needed@sha256:deed-beef
   - name: gitlab-init
     image: gitlab-init/latest
     imagePullPolicy: Always
@@ -140,15 +142,15 @@ containers:
     args: ["doIt", "--debug"]
     workingDir: "/path/to/here"
     ports:
-    - containerPort: 80
-      name: fred
-      protocol: TCP
-    - containerPort: 443
-      name: mary
+      - containerPort: 80
+        name: fred
+        protocol: TCP
+      - containerPort: 443
+        name: mary
     envConfig:
       brackets: '["hello", "world"]'
       foo: bar
-      restricted: 'yes'
+      restricted: "yes"
       switch: on
       special: p@ssword's
 configMaps:
@@ -161,33 +163,41 @@ service:
     foo: bar
 serviceAccount:
   automountServiceAccountToken: true
-  global: true
-  rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "watch", "list"]
+  roles:
+    - global: true
+      rules:
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["get", "watch", "list"]
 kubernetesResources:
   serviceAccounts:
-  - name: k8sServiceAccount1
-    automountServiceAccountToken: true
-    global: true
-    rules:
-    - apiGroups: [""]
-      resources: ["pods"]
-      verbs: ["get", "watch", "list"]
-    - nonResourceURLs: ["/healthz", "/healthz/*"] # '*' in a nonResourceURL is a suffix glob match
-      verbs: ["get", "post"]
-    - apiGroups: ["rbac.authorization.k8s.io"]
-      resources: ["clusterroles"]
-      verbs: ["bind"]
-      resourceNames: ["admin","edit","view"]
+    - name: k8sServiceAccount1
+      automountServiceAccountToken: true
+      roles:
+        - name: k8sRole
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "watch", "list"]
+            - nonResourceURLs: ["/healthz", "/healthz/*"] # '*' in a nonResourceURL is a suffix glob match
+              verbs: ["get", "post"]
+            - apiGroups: ["rbac.authorization.k8s.io"]
+              resources: ["clusterroles"]
+              verbs: ["bind"]
+              resourceNames: ["admin", "edit", "view"]
+        - name: k8sClusterRole
+          global: true
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "watch", "list"]
   pod:
     restartPolicy: OnFailure
     activeDeadlineSeconds: 10
     terminationGracePeriodSeconds: 20
     securityContext:
       runAsNonRoot: true
-      supplementalGroups: [1,2]
+      supplementalGroups: [1, 2]
     readinessGates:
       - conditionType: PodScheduled
     dnsPolicy: ClusterFirstWithHostNet
@@ -196,68 +206,75 @@ kubernetesResources:
     - name: build-robot-secret
       type: Opaque
       stringData:
-          config.yaml: |-
-              apiUrl: "https://my.api.com/api/v1"
-              username: fred
-              password: shhhh
+        config.yaml: |-
+          apiUrl: "https://my.api.com/api/v1"
+          username: fred
+          password: shhhh
     - name: another-build-robot-secret
       type: Opaque
       data:
-          username: YWRtaW4=
-          password: MWYyZDFlMmU2N2Rm
+        username: YWRtaW4=
+        password: MWYyZDFlMmU2N2Rm
   customResourceDefinitions:
-    tfjobs.kubeflow.org:
-      group: kubeflow.org
-      scope: Cluster
-      names:
-        kind: TFJob
-        singular: tfjob
-        plural: tfjobs
-      version: v1
-      versions:
-      - name: v1
-        served: true
-        storage: true
-      - name: v1beta2
-        served: true
-        storage: false
-      conversion:
-        strategy: None
-      preserveUnknownFields: false
-      additionalPrinterColumns:
-      - name: Worker
-        type: integer
-        description: Worker attribute.
-        jsonPath: .spec.tfReplicaSpecs.Worker
-      validation:
-        openAPIV3Schema:
-          properties:
-            spec:
-              properties:
-                tfReplicaSpecs:
-                  properties:
-                    Worker:
-                      properties:
-                        replicas:
-                          type: integer
-                          minimum: 1
-                    PS:
-                      properties:
-                        replicas:
-                          type: integer
-                          minimum: 1
-                    Chief:
-                      properties:
-                        replicas:
-                          type: integer
-                          minimum: 1
-                          maximum: 1
+    - name: tfjobs.kubeflow.org
+      labels:
+        foo: bar
+        juju-global-resource-lifecycle: model
+      spec:
+        group: kubeflow.org
+        scope: Cluster
+        names:
+          kind: TFJob
+          singular: tfjob
+          plural: tfjobs
+        version: v1
+        versions:
+          - name: v1
+            served: true
+            storage: true
+          - name: v1beta2
+            served: true
+            storage: false
+        conversion:
+          strategy: None
+        preserveUnknownFields: false
+        additionalPrinterColumns:
+          - name: Worker
+            type: integer
+            description: Worker attribute.
+            jsonPath: .spec.tfReplicaSpecs.Worker
+        validation:
+          openAPIV3Schema:
+            properties:
+              spec:
+                properties:
+                  tfReplicaSpecs:
+                    properties:
+                      Worker:
+                        properties:
+                          replicas:
+                            type: integer
+                            minimum: 1
+                      PS:
+                        properties:
+                          replicas:
+                            type: integer
+                            minimum: 1
+                      Chief:
+                        properties:
+                          replicas:
+                            type: integer
+                            minimum: 1
+                            maximum: 1
   customResources:
     tfjobs.kubeflow.org:
       - apiVersion: "kubeflow.org/v1"
         kind: "TFJob"
         metadata:
           name: "dist-mnist-for-e2e-test"
+        labels:
+          foo: bar
+          juju-global-resource-lifecycle: model
         spec:
           tfReplicaSpecs:
             PS:
@@ -284,12 +301,12 @@ kubernetesResources:
         nginx.ingress.kubernetes.io/rewrite-target: /
       spec:
         rules:
-        - http:
-            paths:
-            - path: /testpath
-              backend:
-                serviceName: test
-                servicePort: 80
+          - http:
+              paths:
+                - path: /testpath
+                  backend:
+                    serviceName: test
+                    servicePort: 80
   mutatingWebhookConfigurations:
     example-mutatingwebhookconfiguration:
       - name: "example.mutatingwebhookconfiguration.com"
@@ -302,27 +319,27 @@ kubernetesResources:
           caBundle: "YXBwbGVz"
         namespaceSelector:
           matchExpressions:
-          - key: production
-            operator: DoesNotExist
+            - key: production
+              operator: DoesNotExist
         rules:
-        - apiGroups:
-          - ""
-          apiVersions:
-          - v1
-          operations:
-          - CREATE
-          - UPDATE
-          resources:
-          - pods
+          - apiGroups:
+              - ""
+            apiVersions:
+              - v1
+            operations:
+              - CREATE
+              - UPDATE
+            resources:
+              - pods
   validatingWebhookConfigurations:
     pod-policy.example.com:
       - name: "pod-policy.example.com"
         rules:
-        - apiGroups:   [""]
-          apiVersions: ["v1"]
-          operations:  ["CREATE"]
-          resources:   ["pods"]
-          scope:       "Namespaced"
+          - apiGroups: [""]
+            apiVersions: ["v1"]
+            operations: ["CREATE"]
+            resources: ["pods"]
+            scope: "Namespaced"
         clientConfig:
           service:
             namespace: "example-namespace"
@@ -331,6 +348,7 @@ kubernetesResources:
         admissionReviewVersions: ["v1", "v1beta1"]
         sideEffects: None
         timeoutSeconds: 5
+
 `[1:]
 
 	expectedFileContent := `
@@ -338,14 +356,21 @@ kubernetesResources:
 foo: bar
 `[1:]
 
-	sa1 := &specs.ServiceAccountSpec{}
-	sa1.AutomountServiceAccountToken = boolPtr(true)
-	sa1.Global = true
-	sa1.Rules = []specs.PolicyRule{
-		{
-			APIGroups: []string{""},
-			Resources: []string{"pods"},
-			Verbs:     []string{"get", "watch", "list"},
+	sa1 := &specs.PrimeServiceAccountSpecV3{
+		ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+			AutomountServiceAccountToken: boolPtr(true),
+			Roles: []specs.Role{
+				{
+					Rules: []specs.PolicyRule{
+						{
+							APIGroups: []string{""},
+							Resources: []string{"pods"},
+							Verbs:     []string{"get", "watch", "list"},
+						},
+					},
+					Global: true,
+				},
+			},
 		},
 	}
 
@@ -530,26 +555,48 @@ echo "do some stuff here for gitlab-init container"
 			},
 		}
 
-		sa2 := k8sspecs.K8sServiceAccountSpec{
-			Name: "k8sServiceAccount1",
-		}
-		sa2.Global = true
-		sa2.AutomountServiceAccountToken = boolPtr(true)
-		sa2.Rules = []specs.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods"},
-				Verbs:     []string{"get", "watch", "list"},
-			},
-			{
-				NonResourceURLs: []string{"/healthz", "/healthz/*"},
-				Verbs:           []string{"get", "post"},
-			},
-			{
-				APIGroups:     []string{"rbac.authorization.k8s.io"},
-				Resources:     []string{"clusterroles"},
-				Verbs:         []string{"bind"},
-				ResourceNames: []string{"admin", "edit", "view"},
+		rbacResources := k8sspecs.K8sRBACResources{
+			ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+				{
+					Name: "k8sServiceAccount1",
+					ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+						AutomountServiceAccountToken: boolPtr(true),
+						Roles: []specs.Role{
+							{
+								Name:   "k8sRole",
+								Global: false,
+								Rules: []specs.PolicyRule{
+									{
+										APIGroups: []string{""},
+										Resources: []string{"pods"},
+										Verbs:     []string{"get", "watch", "list"},
+									},
+									{
+										NonResourceURLs: []string{"/healthz", "/healthz/*"},
+										Verbs:           []string{"get", "post"},
+									},
+									{
+										APIGroups:     []string{"rbac.authorization.k8s.io"},
+										Resources:     []string{"clusterroles"},
+										Verbs:         []string{"bind"},
+										ResourceNames: []string{"admin", "edit", "view"},
+									},
+								},
+							},
+							{
+								Name:   "k8sClusterRole",
+								Global: true,
+								Rules: []specs.PolicyRule{
+									{
+										APIGroups: []string{""},
+										Resources: []string{"pods"},
+										Verbs:     []string{"get", "watch", "list"},
+									},
+								},
+							},
+						},
+					},
+				},
 			},
 		}
 
@@ -646,9 +693,7 @@ echo "do some stuff here for gitlab-init container"
 
 		pSpecs.ProviderPod = &k8sspecs.K8sPodSpec{
 			KubernetesResources: &k8sspecs.KubernetesResources{
-				ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
-					sa2,
-				},
+				K8sRBACResources: rbacResources,
 				Pod: &k8sspecs.PodSpec{
 					ActiveDeadlineSeconds:         int64Ptr(10),
 					RestartPolicy:                 core.RestartPolicyOnFailure,
@@ -683,60 +728,67 @@ password: shhhh`[1:],
 						},
 					},
 				},
-				CustomResourceDefinitions: map[string]apiextensionsv1beta1.CustomResourceDefinitionSpec{
-					"tfjobs.kubeflow.org": {
-						Group:   "kubeflow.org",
-						Version: "v1",
-						Versions: []apiextensionsv1beta1.CustomResourceDefinitionVersion{
-							{Name: "v1", Served: true, Storage: true},
-							{Name: "v1beta2", Served: true, Storage: false},
+				CustomResourceDefinitions: []k8sspecs.K8sCustomResourceDefinitionSpec{
+					{
+						Name: "tfjobs.kubeflow.org",
+						Labels: map[string]string{
+							"foo":                            "bar",
+							"juju-global-resource-lifecycle": "model",
 						},
-						Scope:                 "Cluster",
-						PreserveUnknownFields: boolPtr(false),
-						Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
-							Kind:     "TFJob",
-							Plural:   "tfjobs",
-							Singular: "tfjob",
-						},
-						Conversion: &apiextensionsv1beta1.CustomResourceConversion{
-							Strategy: apiextensionsv1beta1.NoneConverter,
-						},
-						AdditionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
-							{
-								Name:        "Worker",
-								Type:        "integer",
-								Description: "Worker attribute.",
-								JSONPath:    ".spec.tfReplicaSpecs.Worker",
+						Spec: apiextensionsv1beta1.CustomResourceDefinitionSpec{
+							Group:   "kubeflow.org",
+							Version: "v1",
+							Versions: []apiextensionsv1beta1.CustomResourceDefinitionVersion{
+								{Name: "v1", Served: true, Storage: true},
+								{Name: "v1beta2", Served: true, Storage: false},
 							},
-						},
-						Validation: &apiextensionsv1beta1.CustomResourceValidation{
-							OpenAPIV3Schema: &apiextensionsv1beta1.JSONSchemaProps{
-								Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-									"spec": {
-										Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-											"tfReplicaSpecs": {
-												Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-													"PS": {
-														Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-															"replicas": {
-																Type: "integer", Minimum: float64Ptr(1),
+							Scope:                 "Cluster",
+							PreserveUnknownFields: boolPtr(false),
+							Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
+								Kind:     "TFJob",
+								Plural:   "tfjobs",
+								Singular: "tfjob",
+							},
+							Conversion: &apiextensionsv1beta1.CustomResourceConversion{
+								Strategy: apiextensionsv1beta1.NoneConverter,
+							},
+							AdditionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+								{
+									Name:        "Worker",
+									Type:        "integer",
+									Description: "Worker attribute.",
+									JSONPath:    ".spec.tfReplicaSpecs.Worker",
+								},
+							},
+							Validation: &apiextensionsv1beta1.CustomResourceValidation{
+								OpenAPIV3Schema: &apiextensionsv1beta1.JSONSchemaProps{
+									Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+										"spec": {
+											Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+												"tfReplicaSpecs": {
+													Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+														"PS": {
+															Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+																"replicas": {
+																	Type: "integer", Minimum: float64Ptr(1),
+																},
 															},
 														},
-													},
-													"Chief": {
-														Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-															"replicas": {
-																Type:    "integer",
-																Minimum: float64Ptr(1),
-																Maximum: float64Ptr(1),
+														"Chief": {
+															Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+																"replicas": {
+																	Type:    "integer",
+																	Minimum: float64Ptr(1),
+																	Maximum: float64Ptr(1),
+																},
 															},
 														},
-													},
-													"Worker": {
-														Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
-															"replicas": {
-																Type:    "integer",
-																Minimum: float64Ptr(1),
+														"Worker": {
+															Properties: map[string]apiextensionsv1beta1.JSONSchemaProps{
+																"replicas": {
+																	Type:    "integer",
+																	Minimum: float64Ptr(1),
+																},
 															},
 														},
 													},
@@ -756,6 +808,10 @@ password: shhhh`[1:],
 								"apiVersion": "kubeflow.org/v1",
 								"metadata": map[string]interface{}{
 									"name": "dist-mnist-for-e2e-test",
+								},
+								"labels": map[string]interface{}{
+									"foo":                            "bar",
+									"juju-global-resource-lifecycle": "model",
 								},
 								"kind": "TFJob",
 								"spec": map[string]interface{}{
@@ -895,7 +951,7 @@ serviceAccount:
 `[1:]
 
 	_, err := k8sspecs.ParsePodSpec(specStr)
-	c.Assert(err, gc.ErrorMatches, `rules is required`)
+	c.Assert(err, gc.ErrorMatches, `roles is required`)
 }
 
 func (s *v3SpecsSuite) TestValidateCustomResourceDefinitions(c *gc.C) {
@@ -904,43 +960,92 @@ containers:
   - name: gitlab-helper
     image: gitlab-helper/latest
     ports:
-    - containerPort: 8080
-      protocol: TCP
+      - containerPort: 8080
+        protocol: TCP
 kubernetesResources:
   customResourceDefinitions:
-    tfjobs.kubeflow.org:
-      group: kubeflow.org
-      version: v1alpha2
-      scope: invalid-scope
-      names:
-        plural: "tfjobs"
-        singular: "tfjob"
-        kind: TFJob
-      validation:
-        openAPIV3Schema:
-          properties:
-            tfReplicaSpecs:
-              properties:
-                Worker:
-                  properties:
-                    replicas:
-                      type: integer
-                      minimum: 1
-                PS:
-                  properties:
-                    replicas:
-                      type: integer
-                      minimum: 1
-                Chief:
-                  properties:
-                    replicas:
-                      type: integer
-                      minimum: 1
-                      maximum: 1
+    - name: tfjobs.kubeflow.org
+      spec:
+        group: kubeflow.org
+        version: v1alpha2
+        scope: invalid-scope
+        names:
+          plural: "tfjobs"
+          singular: "tfjob"
+          kind: TFJob
+        validation:
+          openAPIV3Schema:
+            properties:
+              tfReplicaSpecs:
+                properties:
+                  Worker:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                  PS:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                  Chief:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                        maximum: 1
 `[1:]
 
 	_, err := k8sspecs.ParsePodSpec(specStr)
 	c.Assert(err, gc.ErrorMatches, `custom resource definition "tfjobs.kubeflow.org" scope "invalid-scope" is not supported, please use "Namespaced" or "Cluster" scope`)
+
+	specStr = version3Header + `
+containers:
+  - name: gitlab-helper
+    image: gitlab-helper/latest
+    ports:
+      - containerPort: 8080
+        protocol: TCP
+kubernetesResources:
+  customResourceDefinitions:
+    - name: tfjobs.kubeflow.org
+      annotations:
+        foo: bar
+      labels:
+        /foo: bar
+      spec:
+        group: kubeflow.org
+        version: v1alpha2
+        scope: Cluster
+        names:
+          plural: "tfjobs"
+          singular: "tfjob"
+          kind: TFJob
+        validation:
+          openAPIV3Schema:
+            properties:
+              tfReplicaSpecs:
+                properties:
+                  Worker:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                  PS:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                  Chief:
+                    properties:
+                      replicas:
+                        type: integer
+                        minimum: 1
+                        maximum: 1
+`[1:]
+
+	_, err = k8sspecs.ParsePodSpec(specStr)
+	c.Assert(err, gc.ErrorMatches, `label key "/foo": prefix part must be non-empty not valid`)
 }
 
 func (s *v3SpecsSuite) TestValidateMutatingWebhookConfigurations(c *gc.C) {
@@ -1003,6 +1108,643 @@ kubernetesResources:
 
 	_, err := k8sspecs.ParsePodSpec(specStr)
 	c.Assert(err, gc.ErrorMatches, `ingress name is missing`)
+
+	specStr = version3Header + `
+containers:
+  - name: gitlab-helper
+    image: gitlab-helper/latest
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+kubernetesResources:
+  ingressResources:
+    - name: test-ingress
+      labels:
+        /foo: bar
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+      spec:
+        rules:
+        - http:
+            paths:
+            - path: /testpath
+              backend:
+                serviceName: test
+                servicePort: 80
+`[1:]
+
+	_, err = k8sspecs.ParsePodSpec(specStr)
+	c.Assert(err, gc.ErrorMatches, `label key "/foo": prefix part must be non-empty not valid`)
+}
+
+func (s *v3SpecsSuite) TestPrimeServiceAccountToK8sRBACResources(c *gc.C) {
+	primeSA := specs.PrimeServiceAccountSpecV3{
+		ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+			AutomountServiceAccountToken: boolPtr(true),
+			Roles: []specs.Role{
+				{
+					Global: true,
+					Rules: []specs.PolicyRule{
+						{
+							APIGroups: []string{""},
+							Resources: []string{"pods"},
+							Verbs:     []string{"get", "watch", "list"},
+						},
+					},
+				},
+			},
+		},
+	}
+	c.Assert(primeSA.Validate(), jc.ErrorIsNil)
+	primeSA.SetName("test-app-rbac")
+	c.Assert(primeSA.Validate(), jc.ErrorIsNil)
+	c.Assert(primeSA.GetName(), gc.DeepEquals, "test-app-rbac")
+	c.Assert(primeSA.Roles[0].Name, gc.DeepEquals, "test-app-rbac")
+
+	sa, err := k8sspecs.PrimeServiceAccountToK8sRBACResources(primeSA)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(sa.Validate(), jc.ErrorIsNil)
+	c.Assert(sa, gc.DeepEquals, &k8sspecs.K8sRBACResources{
+		ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+			{
+				Name: "test-app-rbac",
+				ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+					AutomountServiceAccountToken: boolPtr(true),
+					Roles: []specs.Role{
+						{
+							Name:   "test-app-rbac",
+							Global: true,
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups: []string{""},
+									Resources: []string{"pods"},
+									Verbs:     []string{"get", "watch", "list"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+}
+
+type tcK8sRBACResources struct {
+	Spec   k8sspecs.K8sRBACResources
+	ErrStr string
+}
+
+func (s *v3SpecsSuite) TestK8sRBACResourcesValidate(c *gc.C) {
+	for i, tc := range []tcK8sRBACResources{
+		{
+			Spec: k8sspecs.K8sRBACResources{
+				ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+					{
+						Name: "sa2",
+						ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+							AutomountServiceAccountToken: boolPtr(true),
+							Roles: []specs.Role{
+								{
+									Name:   "cluster-role2",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											APIGroups: []string{""},
+											Resources: []string{"pods"},
+											Verbs:     []string{"get", "watch", "list"},
+										},
+									},
+								},
+								{
+									Name:   "cluster-role2",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											NonResourceURLs: []string{"/healthz", "/healthz/*"},
+											Verbs:           []string{"get", "post"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			ErrStr: `duplicated role name "cluster-role2" not valid`,
+		},
+		{
+			Spec: k8sspecs.K8sRBACResources{
+				ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+					{
+						Name: "sa2",
+						ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+							AutomountServiceAccountToken: boolPtr(true),
+							Roles: []specs.Role{
+								{
+									Name:   "cluster-role2",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											APIGroups: []string{""},
+											Resources: []string{"pods"},
+											Verbs:     []string{"get", "watch", "list"},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Name: "sa2",
+						ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+							AutomountServiceAccountToken: boolPtr(true),
+							Roles: []specs.Role{
+								{
+									Name:   "cluster-role3",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											APIGroups: []string{""},
+											Verbs:     []string{"get", "watch", "list"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			ErrStr: `duplicated service account name "sa2" not valid`,
+		},
+		{
+			Spec: k8sspecs.K8sRBACResources{
+				ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+					{
+						Name: "sa2",
+						ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+							AutomountServiceAccountToken: boolPtr(true),
+							Roles: []specs.Role{
+								{
+									Name:   "cluster-role2",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											APIGroups: []string{""},
+											Resources: []string{"pods"},
+											Verbs:     []string{"get", "watch", "list"},
+										},
+									},
+								},
+								{
+									Name:   "",
+									Global: true,
+									Rules: []specs.PolicyRule{
+										{
+											NonResourceURLs: []string{"/healthz", "/healthz/*"},
+											Verbs:           []string{"get", "post"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			ErrStr: `either all or none of the roles of the service account "sa2" should have a name set`,
+		},
+	} {
+		c.Logf("checking K8sRBACResources Validate %d", i)
+		c.Check(tc.Spec.Validate(), gc.ErrorMatches, tc.ErrStr)
+	}
+}
+
+func (s *v3SpecsSuite) TestK8sRBACResourcesToK8s(c *gc.C) {
+	namespace := "test"
+	appName := "app-name"
+	annotations := map[string]string{
+		"fred":               "mary",
+		"juju.io/controller": testing.ControllerTag.Id(),
+	}
+	prefixNameSpace := func(name string) string {
+		return fmt.Sprintf("%s-%s", namespace, name)
+	}
+	getBindingName := func(sa, cR k8sspecs.NameGetter) string {
+		return fmt.Sprintf("%s-%s", sa.GetName(), cR.GetName())
+	}
+	getSAMeta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   namespace,
+			Labels:      map[string]string{"juju-app": appName},
+			Annotations: annotations,
+		}
+	}
+	getRoleClusterRoleName := func(roleName, serviceAccountName string, index int) string {
+		if roleName != "" {
+			return roleName
+		}
+		roleName = fmt.Sprintf("%s-%s", appName, serviceAccountName)
+		if index == 0 {
+			return roleName
+		}
+		return fmt.Sprintf("%s%d", roleName, index)
+	}
+	getRoleMeta := func(roleName, serviceAccountName string, index int) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:        getRoleClusterRoleName(roleName, serviceAccountName, index),
+			Namespace:   namespace,
+			Labels:      map[string]string{"juju-app": appName},
+			Annotations: annotations,
+		}
+	}
+	getClusterRoleMeta := func(roleName, serviceAccountName string, index int) metav1.ObjectMeta {
+		roleName = getRoleClusterRoleName(roleName, serviceAccountName, index)
+		return metav1.ObjectMeta{
+			Name:        prefixNameSpace(roleName),
+			Namespace:   namespace,
+			Labels:      map[string]string{"juju-app": appName, "juju-model": namespace},
+			Annotations: annotations,
+		}
+	}
+	getBindingMeta := func(sa, role k8sspecs.NameGetter) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:        getBindingName(sa, role),
+			Namespace:   namespace,
+			Labels:      map[string]string{"juju-app": appName},
+			Annotations: annotations,
+		}
+	}
+	getClusterBindingMeta := func(sa, clusterRole k8sspecs.NameGetter) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:        getBindingName(sa, clusterRole),
+			Namespace:   namespace,
+			Labels:      map[string]string{"juju-app": appName, "juju-model": namespace},
+			Annotations: annotations,
+		}
+	}
+
+	rbacResource := k8sspecs.K8sRBACResources{
+		ServiceAccounts: []k8sspecs.K8sServiceAccountSpec{
+			{
+				Name: "sa1",
+				ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+					AutomountServiceAccountToken: boolPtr(true),
+					Roles: []specs.Role{
+						{
+							Name: "role1",
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups: []string{""},
+									Resources: []string{"pods"},
+									Verbs:     []string{"get", "watch", "list"},
+								},
+							},
+						},
+						{
+							Name:   "cluster-role2",
+							Global: true,
+							Rules: []specs.PolicyRule{
+								{
+									NonResourceURLs: []string{"/healthz", "/healthz/*"},
+									Verbs:           []string{"get", "post"},
+								},
+							},
+						},
+						{
+							Name:   "cluster-role3",
+							Global: true,
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups:     []string{"rbac.authorization.k8s.io"},
+									Resources:     []string{"clusterroles"},
+									Verbs:         []string{"bind"},
+									ResourceNames: []string{"admin", "edit", "view"},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Name: "sa-foo",
+				ServiceAccountSpecV3: specs.ServiceAccountSpecV3{
+					Roles: []specs.Role{
+						{
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups: []string{""},
+									Resources: []string{"pods"},
+									Verbs:     []string{"get", "watch", "list"},
+								},
+							},
+						},
+						{
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups: []string{""},
+									Resources: []string{"pods"},
+									Verbs:     []string{"get", "watch"},
+								},
+							},
+						},
+						{
+							Global: true,
+							Rules: []specs.PolicyRule{
+								{
+									NonResourceURLs: []string{"/healthz", "/healthz/*"},
+									Verbs:           []string{"get", "post"},
+								},
+							},
+						},
+						{
+							Global: true,
+							Rules: []specs.PolicyRule{
+								{
+									APIGroups:     []string{"rbac.authorization.k8s.io"},
+									Resources:     []string{"clusterroles"},
+									Verbs:         []string{"bind"},
+									ResourceNames: []string{"admin", "edit", "view"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	c.Assert(rbacResource.Validate(), jc.ErrorIsNil)
+	serviceAccounts, roles, clusterroles, roleBindings, clusterRoleBindings := rbacResource.ToK8s(
+		getSAMeta,
+		getRoleMeta,
+		getClusterRoleMeta,
+		getBindingMeta,
+		getClusterBindingMeta,
+	)
+	c.Assert(serviceAccounts, gc.DeepEquals, []core.ServiceAccount{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa1",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			AutomountServiceAccountToken: boolPtr(true),
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa-foo",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+		},
+	})
+	c.Assert(roles, gc.DeepEquals, []rbacv1.Role{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "role1",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods"},
+					Verbs:     []string{"get", "watch", "list"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "app-name-sa-foo",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods"},
+					Verbs:     []string{"get", "watch", "list"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "app-name-sa-foo1",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods"},
+					Verbs:     []string{"get", "watch"},
+				},
+			},
+		},
+	})
+	c.Assert(clusterroles, gc.DeepEquals, []rbacv1.ClusterRole{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-cluster-role2",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					NonResourceURLs: []string{"/healthz", "/healthz/*"},
+					Verbs:           []string{"get", "post"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-cluster-role3",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups:     []string{"rbac.authorization.k8s.io"},
+					Resources:     []string{"clusterroles"},
+					Verbs:         []string{"bind"},
+					ResourceNames: []string{"admin", "edit", "view"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-app-name-sa-foo2",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					NonResourceURLs: []string{"/healthz", "/healthz/*"},
+					Verbs:           []string{"get", "post"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-app-name-sa-foo3",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups:     []string{"rbac.authorization.k8s.io"},
+					Resources:     []string{"clusterroles"},
+					Verbs:         []string{"bind"},
+					ResourceNames: []string{"admin", "edit", "view"},
+				},
+			},
+		},
+	})
+	c.Assert(roleBindings, gc.DeepEquals, []rbacv1.RoleBinding{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa1-role1",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "role1",
+				Kind: "Role",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa1",
+					Namespace: "test",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa-foo-app-name-sa-foo",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "app-name-sa-foo",
+				Kind: "Role",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa-foo",
+					Namespace: "test",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa-foo-app-name-sa-foo1",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "app-name-sa-foo1",
+				Kind: "Role",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa-foo",
+					Namespace: "test",
+				},
+			},
+		},
+	})
+	c.Assert(clusterRoleBindings, gc.DeepEquals, []rbacv1.ClusterRoleBinding{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa1-test-cluster-role2",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "test-cluster-role2",
+				Kind: "ClusterRole",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa1",
+					Namespace: "test",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa1-test-cluster-role3",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "test-cluster-role3",
+				Kind: "ClusterRole",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa1",
+					Namespace: "test",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa-foo-test-app-name-sa-foo2",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "test-app-name-sa-foo2",
+				Kind: "ClusterRole",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa-foo",
+					Namespace: "test",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "sa-foo-test-app-name-sa-foo3",
+				Namespace:   "test",
+				Labels:      map[string]string{"juju-app": "app-name", "juju-model": "test"},
+				Annotations: annotations,
+			},
+			RoleRef: rbacv1.RoleRef{
+				Name: "test-app-name-sa-foo3",
+				Kind: "ClusterRole",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      rbacv1.ServiceAccountKind,
+					Name:      "sa-foo",
+					Namespace: "test",
+				},
+			},
+		},
+	})
 }
 
 func (s *v3SpecsSuite) TestUnknownFieldError(c *gc.C) {

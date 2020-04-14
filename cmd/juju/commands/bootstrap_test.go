@@ -31,7 +31,6 @@ import (
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
 
-	"github.com/juju/juju/cert"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmdtest"
 	"github.com/juju/juju/cmd/modelcmd"
@@ -94,8 +93,6 @@ func (s *BootstrapSuite) SetUpSuite(c *gc.C) {
 	s.FakeJujuXDGDataHomeSuite.SetUpSuite(c)
 	s.MgoSuite.SetUpSuite(c)
 	s.PatchValue(&keys.JujuPublicKey, sstesting.SignedMetadataPublicKey)
-	s.PatchValue(&cert.NewCA, coretesting.NewCA)
-	s.PatchValue(&cert.NewLeafKeyBits, 1024)
 }
 
 func (s *BootstrapSuite) SetUpTest(c *gc.C) {
@@ -217,8 +214,8 @@ type bootstrapTest struct {
 func (s *BootstrapSuite) patchVersionAndSeries(c *gc.C, hostSeries string) {
 	resetJujuXDGDataHome(c)
 	s.PatchValue(&series.MustHostSeries, func() string { return hostSeries })
-	s.PatchValue(&supportedJujuSeries, func() set.Strings {
-		return set.NewStrings(hostSeries).Union(defaultSupportedJujuSeries)
+	s.PatchValue(&supportedJujuSeries, func(time.Time, string, string) (set.Strings, error) {
+		return set.NewStrings(hostSeries).Union(defaultSupportedJujuSeries), nil
 	})
 	s.patchVersion(c)
 }
@@ -1314,8 +1311,8 @@ func (s *BootstrapSuite) setupAutoUploadTest(c *gc.C, vers, ser string) {
 	// so we can test that an upload is forced.
 	s.PatchValue(&jujuversion.Current, version.MustParse(vers))
 	s.PatchValue(&series.MustHostSeries, func() string { return ser })
-	s.PatchValue(&supportedJujuSeries, func() set.Strings {
-		return set.NewStrings(ser).Union(defaultSupportedJujuSeries)
+	s.PatchValue(&supportedJujuSeries, func(time.Time, string, string) (set.Strings, error) {
+		return set.NewStrings(ser).Union(defaultSupportedJujuSeries), nil
 	})
 
 	// Create home with dummy provider and remove all
@@ -1924,6 +1921,7 @@ You will need to have a credential if you want to bootstrap on a cloud, see
 ‘juju autoload-credentials’ and ‘juju add-credential’. The first credential
 listed is the default. Add more clouds with ‘juju add-cloud’.
 `[1:])
+	c.Assert(cmdtesting.Stderr(ctx), gc.Equals, "")
 }
 
 func (s *BootstrapSuite) TestBootstrapPrintCloudsInvalidCredential(c *gc.C) {

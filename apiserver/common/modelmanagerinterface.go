@@ -10,6 +10,7 @@ import (
 	"github.com/juju/errors"
 	"gopkg.in/juju/names.v3"
 
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/permission"
@@ -66,7 +67,8 @@ type ModelManagerBackend interface {
 	ExportPartial(state.ExportConfig) (description.Model, error)
 	SetUserAccess(subject names.UserTag, target names.Tag, access permission.Access) (permission.UserAccess, error)
 	SetModelMeterStatus(string, string) error
-	ReloadSpaces(environ environs.BootstrapEnviron) error
+	SaveProviderSpaces([]network.SpaceInfo) error
+	SaveProviderSubnets([]network.SubnetInfo, string) error
 	LatestMigration() (state.ModelMigration, error)
 	DumpAll() (map[string]interface{}, error)
 	Close() error
@@ -91,8 +93,10 @@ type Model interface {
 	ModelTag() names.ModelTag
 	Owner() names.UserTag
 	Status() (status.StatusInfo, error)
-	Cloud() string
-	CloudCredential() (names.CloudCredentialTag, bool)
+	CloudName() string
+	Cloud() (cloud.Cloud, error)
+	CloudCredentialTag() (names.CloudCredentialTag, bool)
+	CloudCredential() (state.Credential, bool, error)
 	CloudRegion() string
 	Users() ([]permission.UserAccess, error)
 	Destroy(state.DestroyModelParams) error

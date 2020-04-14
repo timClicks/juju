@@ -31,10 +31,7 @@ func instanceTypes(mm *MachineManagerAPI,
 	}
 
 	cloudSpec := func() (environs.CloudSpec, error) {
-		cloudName := model.Cloud()
-		regionName := model.CloudRegion()
-		credentialTag, _ := model.CloudCredential()
-		return stateenvirons.CloudSpec(mm.st, cloudName, regionName, credentialTag)
+		return stateenvirons.CloudSpecForModel(model)
 	}
 	backend := common.EnvironConfigGetterFuncs{
 		CloudSpecFunc:   cloudSpec,

@@ -16,6 +16,9 @@ import (
 	"gopkg.in/juju/worker.v1/workertest"
 
 	"github.com/juju/juju/agent"
+	"github.com/juju/juju/apiserver/apiserverhttp"
+	"github.com/juju/juju/pki"
+	pkitest "github.com/juju/juju/pki/test"
 	"github.com/juju/juju/state"
 	statetesting "github.com/juju/juju/state/testing"
 	jworker "github.com/juju/juju/worker"
@@ -25,6 +28,7 @@ import (
 type ManifoldSuite struct {
 	statetesting.StateSuite
 
+	authority    pki.Authority
 	manifold     dependency.Manifold
 	context      dependency.Context
 	stateTracker stubStateTracker
@@ -35,6 +39,10 @@ type ManifoldSuite struct {
 var _ = gc.Suite(&ManifoldSuite{})
 
 func (s *ManifoldSuite) SetUpTest(c *gc.C) {
+	var err error
+	s.authority, err = pkitest.NewTestAuthority()
+	c.Assert(err, jc.ErrorIsNil)
+
 	s.StateSuite.SetUpTest(c)
 
 	s.stateTracker = stubStateTracker{pool: s.StatePool}
@@ -43,17 +51,23 @@ func (s *ManifoldSuite) SetUpTest(c *gc.C) {
 	s.context = s.newContext(nil)
 	s.manifold = modelworkermanager.Manifold(modelworkermanager.ManifoldConfig{
 		AgentName:      "agent",
+		AuthorityName:  "authority",
 		StateName:      "state",
+		MuxName:        "mux",
 		NewWorker:      s.newWorker,
 		NewModelWorker: s.newModelWorker,
 		Logger:         loggo.GetLogger("test"),
 	})
 }
 
+var mux = apiserverhttp.NewMux()
+
 func (s *ManifoldSuite) newContext(overlay map[string]interface{}) dependency.Context {
 	resources := map[string]interface{}{
-		"agent": &fakeAgent{},
-		"state": &s.stateTracker}
+		"agent":     &fakeAgent{},
+		"authority": s.authority,
+		"mux":       mux,
+		"state":     &s.stateTracker}
 	for k, v := range overlay {
 		resources[k] = v
 	}
@@ -76,7 +90,7 @@ func (s *ManifoldSuite) newModelWorker(config modelworkermanager.NewModelConfig)
 	return worker.NewRunner(worker.RunnerParams{}), nil
 }
 
-var expectedInputs = []string{"agent", "state"}
+var expectedInputs = []string{"agent", "authority", "mux", "state"}
 
 func (s *ManifoldSuite) TestInputs(c *gc.C) {
 	c.Assert(s.manifold.Inputs, jc.SameContents, expectedInputs)
@@ -101,9 +115,11 @@ func (s *ManifoldSuite) TestStart(c *gc.C) {
 	c.Assert(args, gc.HasLen, 1)
 	c.Assert(args[0], gc.FitsTypeOf, modelworkermanager.Config{})
 	config := args[0].(modelworkermanager.Config)
+	config.Authority = s.authority
 
 	c.Assert(config.NewModelWorker, gc.NotNil)
 	modelConfig := modelworkermanager.NewModelConfig{
+		Authority: s.authority,
 		ModelUUID: "foo",
 		ModelType: state.ModelTypeIAAS,
 	}
@@ -115,7 +131,9 @@ func (s *ManifoldSuite) TestStart(c *gc.C) {
 	config.NewModelWorker = nil
 
 	c.Assert(config, jc.DeepEquals, modelworkermanager.Config{
+		Authority:    s.authority,
 		ModelWatcher: s.State,
+		Mux:          mux,
 		Controller:   modelworkermanager.StatePoolController{s.StatePool},
 		ErrorDelay:   jworker.RestartDelay,
 		Logger:       loggo.GetLogger("test"),

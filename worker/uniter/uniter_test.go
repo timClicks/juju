@@ -28,6 +28,7 @@ import (
 	"github.com/juju/juju/state"
 	"github.com/juju/juju/testcharms"
 	coretesting "github.com/juju/juju/testing"
+	"github.com/juju/juju/worker/uniter"
 	"github.com/juju/juju/worker/uniter/operation"
 	"github.com/juju/juju/worker/uniter/remotestate"
 )
@@ -137,13 +138,6 @@ func (s *UniterSuite) TestUniterStartup(c *gc.C) {
 	s.runUniterTests(c, []uniterTest{
 		// Check conditions that can cause the uniter to fail to start.
 		ut(
-			"unable to create state dir",
-			writeFile{"state", 0644},
-			createCharm{},
-			createApplicationAndUnit{},
-			startUniter{},
-			waitUniterDead{err: `failed to initialize uniter for "unit-u-0": .*` + errNotDir},
-		), ut(
 			"unknown unit",
 			// We still need to create a unit, because that's when we also
 			// connect to the API, but here we use a different application
@@ -197,20 +191,7 @@ func (s *UniterSuite) TestUniterBootstrap(c *gc.C) {
 	})
 }
 
-type noopExecutor struct {
-	operation.Executor
-}
-
-func (m *noopExecutor) Run(op operation.Operation) error {
-	return errors.New("some error occurred")
-}
-
 func (s *UniterSuite) TestUniterStartupStatus(c *gc.C) {
-	executorFunc := func(stateFilePath string, initialState operation.State, acquireLock func(string) (func(), error)) (operation.Executor, error) {
-		e, err := operation.NewExecutor(stateFilePath, initialState, acquireLock)
-		c.Assert(err, jc.ErrorIsNil)
-		return &mockExecutor{e}, nil
-	}
 	s.runUniterTests(c, []uniterTest{
 		ut(
 			"unit status and message at startup",
@@ -219,7 +200,7 @@ func (s *UniterSuite) TestUniterStartupStatus(c *gc.C) {
 			ensureStateWorker{},
 			createApplicationAndUnit{},
 			startUniter{
-				newExecutorFunc: executorFunc,
+				newExecutorFunc: executorFunc(c),
 			},
 			waitUnitAgent{
 				statusGetter: unitStatusGetter,
@@ -354,6 +335,21 @@ func (s *UniterSuite) TestUniterStartHook(c *gc.C) {
 			waitUnitAgent{
 				status: status.Idle,
 			},
+			waitHooks{"start"},
+			verifyRunning{},
+		), ut(
+			"start hook after reboot",
+			quickStart{},
+			stopUniter{},
+			startUniter{
+				rebootQuerier: fakeRebootQuerier{
+					rebootDetected: true,
+				},
+			},
+			// Since the unit has already been started before and
+			// a reboot was detected, we expect the uniter to
+			// queue a start hook to notify the charms about the
+			// reboot.
 			waitHooks{"start"},
 			verifyRunning{},
 		),
@@ -1055,9 +1051,6 @@ func (s *UniterSuite) TestUniterRelations(c *gc.C) {
 			"unknown local relation dir is removed",
 			quickStartRelation{},
 			stopUniter{},
-			custom{func(c *gc.C, ctx *context) {
-				ft.Dir{"state/relations/90210", 0755}.Create(c, ctx.path)
-			}},
 			startUniter{},
 			// We need some synchronisation point here to ensure that the uniter
 			// has entered the correct place in the resolving loop. Now that we are
@@ -1065,9 +1058,6 @@ func (s *UniterSuite) TestUniterRelations(c *gc.C) {
 			// we can get the event to give us the synchronisation point.
 			changeConfig{"blog-title": "Goodness Gracious Me"},
 			waitHooks{"config-changed"},
-			custom{func(c *gc.C, ctx *context) {
-				ft.Removed{"state/relations/90210"}.Check(c, ctx.path)
-			}},
 		), ut(
 			"all relations are available to config-changed on bounce, even if state dir is missing",
 			createCharm{
@@ -1089,11 +1079,6 @@ func (s *UniterSuite) TestUniterRelations(c *gc.C) {
 			addRelation{waitJoin: true},
 			stopUniter{},
 			custom{func(c *gc.C, ctx *context) {
-				// Check the state dir was created, and remove it.
-				path := fmt.Sprintf("state/relations/%d", ctx.relation.Id())
-				ft.Dir{path, 0755}.Check(c, ctx.path)
-				ft.Removed{path}.Create(c, ctx.path)
-
 				// Check that config-changed didn't record any relations, because
 				// they shouldn't been available until after the start hook.
 				ft.File{"charm/relations.out", "", 0644}.Check(c, ctx.path)
@@ -1105,10 +1090,6 @@ func (s *UniterSuite) TestUniterRelations(c *gc.C) {
 			startUniter{},
 			waitHooks{"config-changed"},
 			custom{func(c *gc.C, ctx *context) {
-				// Check the state dir was recreated.
-				path := fmt.Sprintf("state/relations/%d", ctx.relation.Id())
-				ft.Dir{path, 0755}.Check(c, ctx.path)
-
 				// Check that config-changed did record the joined relations.
 				data := fmt.Sprintf("db:%d\n", ctx.relation.Id())
 				ft.File{"charm/relations.out", data, 0644}.Check(c, ctx.path)
@@ -1937,17 +1918,12 @@ func (m *mockExecutor) Run(op operation.Operation, rs <-chan remotestate.Snapsho
 }
 
 func (s *UniterSuite) TestOperationErrorReported(c *gc.C) {
-	executorFunc := func(stateFilePath string, initialState operation.State, acquireLock func(string) (func(), error)) (operation.Executor, error) {
-		e, err := operation.NewExecutor(stateFilePath, initialState, acquireLock)
-		c.Assert(err, jc.ErrorIsNil)
-		return &mockExecutor{e}, nil
-	}
 	s.runUniterTests(c, []uniterTest{
 		ut(
 			"error running operations are reported",
 			createCharm{},
 			serveCharm{},
-			createUniter{executorFunc: executorFunc},
+			createUniter{executorFunc: executorFunc(c)},
 			waitUnitAgent{
 				status: status.Failed,
 				info:   "resolver loop error",
@@ -1958,11 +1934,6 @@ func (s *UniterSuite) TestOperationErrorReported(c *gc.C) {
 }
 
 func (s *UniterSuite) TestTranslateResolverError(c *gc.C) {
-	executorFunc := func(stateFilePath string, initialState operation.State, acquireLock func(string) (func(), error)) (operation.Executor, error) {
-		e, err := operation.NewExecutor(stateFilePath, initialState, acquireLock)
-		c.Assert(err, jc.ErrorIsNil)
-		return &mockExecutor{e}, nil
-	}
 	translateResolverErr := func(in error) error {
 		c.Check(errors.Cause(in), gc.Equals, mockExecutorErr)
 		return errors.New("some other error")
@@ -1973,7 +1944,7 @@ func (s *UniterSuite) TestTranslateResolverError(c *gc.C) {
 			createCharm{},
 			serveCharm{},
 			createUniter{
-				executorFunc:         executorFunc,
+				executorFunc:         executorFunc(c),
 				translateResolverErr: translateResolverErr,
 			},
 			waitUnitAgent{
@@ -1983,4 +1954,12 @@ func (s *UniterSuite) TestTranslateResolverError(c *gc.C) {
 			expectError{".*some other error.*"},
 		),
 	})
+}
+
+func executorFunc(c *gc.C) uniter.NewOperationExecutorFunc {
+	return func(cfg operation.ExecutorConfig) (operation.Executor, error) {
+		e, err := operation.NewExecutor(cfg)
+		c.Assert(err, jc.ErrorIsNil)
+		return &mockExecutor{e}, nil
+	}
 }

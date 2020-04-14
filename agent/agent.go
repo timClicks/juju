@@ -23,7 +23,7 @@ import (
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/apiserver/params"
+	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/machinelock"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
@@ -43,10 +43,11 @@ const (
 
 // These are base values used for the corresponding defaults.
 var (
-	logDir          = paths.MustSucceed(paths.LogDir(series.MustHostSeries()))
-	dataDir         = paths.MustSucceed(paths.DataDir(series.MustHostSeries()))
-	confDir         = paths.MustSucceed(paths.ConfDir(series.MustHostSeries()))
-	metricsSpoolDir = paths.MustSucceed(paths.MetricsSpoolDir(series.MustHostSeries()))
+	logDir           = paths.MustSucceed(paths.LogDir(series.MustHostSeries()))
+	dataDir          = paths.MustSucceed(paths.DataDir(series.MustHostSeries()))
+	transientDataDir = paths.MustSucceed(paths.TransientDataDir(series.MustHostSeries()))
+	confDir          = paths.MustSucceed(paths.ConfDir(series.MustHostSeries()))
+	metricsSpoolDir  = paths.MustSucceed(paths.MetricsSpoolDir(series.MustHostSeries()))
 )
 
 // Agent exposes the agent's configuration to other components. This
@@ -82,6 +83,9 @@ type Paths struct {
 	// DataDir is the data directory where each agent has a subdirectory
 	// containing the configuration files.
 	DataDir string
+	// TransientDataDir is a directory where each agent can store data that
+	// is not expected to survive a reboot.
+	TransientDataDir string
 	// LogDir is the log directory where all logs from all agents on
 	// the machine are written.
 	LogDir string
@@ -97,6 +101,9 @@ type Paths struct {
 func (p *Paths) Migrate(newPaths Paths) {
 	if newPaths.DataDir != "" {
 		p.DataDir = newPaths.DataDir
+	}
+	if newPaths.TransientDataDir != "" {
+		p.TransientDataDir = newPaths.TransientDataDir
 	}
 	if newPaths.LogDir != "" {
 		p.LogDir = newPaths.LogDir
@@ -115,6 +122,9 @@ func NewPathsWithDefaults(p Paths) Paths {
 	if p.DataDir != "" {
 		paths.DataDir = p.DataDir
 	}
+	if p.TransientDataDir != "" {
+		paths.TransientDataDir = p.TransientDataDir
+	}
 	if p.LogDir != "" {
 		paths.LogDir = p.LogDir
 	}
@@ -130,10 +140,11 @@ func NewPathsWithDefaults(p Paths) Paths {
 var (
 	// DefaultPaths defines the default paths for an agent.
 	DefaultPaths = Paths{
-		DataDir:         dataDir,
-		LogDir:          path.Join(logDir, "juju"),
-		MetricsSpoolDir: metricsSpoolDir,
-		ConfDir:         confDir,
+		DataDir:          dataDir,
+		TransientDataDir: transientDataDir,
+		LogDir:           path.Join(logDir, "juju"),
+		MetricsSpoolDir:  metricsSpoolDir,
+		ConfDir:          confDir,
 	}
 )
 
@@ -189,6 +200,10 @@ type Config interface {
 	// containing the configuration files.
 	DataDir() string
 
+	// TransientDataDir returns the directory where this agent should store
+	// any data that is not expected to survive a reboot.
+	TransientDataDir() string
+
 	// LogDir returns the log directory. All logs from all agents on
 	// the machine are written to this directory.
 	LogDir() string
@@ -226,7 +241,7 @@ type Config interface {
 	// StateServingInfo returns the details needed to run
 	// a controller and reports whether those details
 	// are available
-	StateServingInfo() (params.StateServingInfo, bool)
+	StateServingInfo() (controller.StateServingInfo, bool)
 
 	// APIInfo returns details for connecting to the API server and
 	// reports whether the details are available.
@@ -302,7 +317,7 @@ type configSetterOnly interface {
 
 	// SetStateServingInfo sets the information needed
 	// to run a controller
-	SetStateServingInfo(info params.StateServingInfo)
+	SetStateServingInfo(info controller.StateServingInfo)
 
 	// SetControllerAPIPort sets the controller API port in the config.
 	SetControllerAPIPort(port int)
@@ -384,7 +399,7 @@ type configInternal struct {
 	apiDetails         *apiDetails
 	statePassword      string
 	oldPassword        string
-	servingInfo        *params.StateServingInfo
+	servingInfo        *controller.StateServingInfo
 	loggingConfig      string
 	values             map[string]string
 	mongoVersion       string
@@ -482,7 +497,7 @@ func NewAgentConfig(configParams AgentConfigParams) (ConfigSetterWriter, error) 
 
 // NewStateMachineConfig returns a configuration suitable for
 // a machine running the controller.
-func NewStateMachineConfig(configParams AgentConfigParams, serverInfo params.StateServingInfo) (ConfigSetterWriter, error) {
+func NewStateMachineConfig(configParams AgentConfigParams, serverInfo controller.StateServingInfo) (ConfigSetterWriter, error) {
 	if serverInfo.Cert == "" {
 		return nil, errors.Trace(requiredError("controller cert"))
 	}
@@ -641,6 +656,10 @@ func (c *configInternal) DataDir() string {
 	return c.paths.DataDir
 }
 
+func (c *configInternal) TransientDataDir() string {
+	return c.paths.TransientDataDir
+}
+
 func (c *configInternal) MetricsSpoolDir() string {
 	return c.paths.MetricsSpoolDir
 }
@@ -673,14 +692,14 @@ func (c *configInternal) Value(key string) string {
 	return c.values[key]
 }
 
-func (c *configInternal) StateServingInfo() (params.StateServingInfo, bool) {
+func (c *configInternal) StateServingInfo() (controller.StateServingInfo, bool) {
 	if c.servingInfo == nil {
-		return params.StateServingInfo{}, false
+		return controller.StateServingInfo{}, false
 	}
 	return *c.servingInfo, true
 }
 
-func (c *configInternal) SetStateServingInfo(info params.StateServingInfo) {
+func (c *configInternal) SetStateServingInfo(info controller.StateServingInfo) {
 	c.servingInfo = &info
 	if c.statePassword == "" && c.apiDetails != nil {
 		c.statePassword = c.apiDetails.password

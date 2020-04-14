@@ -17,6 +17,7 @@ import (
 	coreagent "github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/api/base"
+	commonapi "github.com/juju/juju/api/common"
 	msapi "github.com/juju/juju/api/meterstatus"
 	"github.com/juju/juju/cmd/jujud/agent/engine"
 	"github.com/juju/juju/core/machinelock"
@@ -302,6 +303,7 @@ func Manifolds(config ManifoldsConfig) dependency.Manifolds {
 			APICallerName: apiCallerName,
 			NewFacade:     retrystrategy.NewFacade,
 			NewWorker:     retrystrategy.NewRetryStrategyWorker,
+			Logger:        loggo.GetLogger("juju.worker.retrystrategy"),
 		})),
 
 		// The uniter installs charms; manages the unit's presence in its
@@ -342,6 +344,7 @@ func Manifolds(config ManifoldsConfig) dependency.Manifolds {
 			Clock:                    config.Clock,
 			NewHookRunner:            meterstatus.NewHookRunner,
 			NewMeterStatusAPIClient:  msapi.NewClient,
+			NewUniterStateAPIClient:  commonapi.NewUniterStateAPI,
 			NewConnectedStatusWorker: meterstatus.NewConnectedStatusWorker,
 			NewIsolatedStatusWorker:  meterstatus.NewIsolatedStatusWorker,
 		})),

@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -18,17 +17,18 @@ import (
 	"time"
 
 	jujuclock "github.com/juju/clock"
+	"github.com/juju/collections/set"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
 	"github.com/juju/utils/arch"
 	"github.com/juju/version"
+	"github.com/kr/pretty"
 	"gopkg.in/juju/names.v3"
 	admissionregistration "k8s.io/api/admissionregistration/v1beta1"
 	apps "k8s.io/api/apps/v1"
 	core "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	k8sstorage "k8s.io/api/storage/v1"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -60,18 +60,28 @@ import (
 	envcontext "github.com/juju/juju/environs/context"
 	"github.com/juju/juju/environs/tags"
 	"github.com/juju/juju/storage"
-	"github.com/juju/juju/storage/provider"
 )
 
 var logger = loggo.GetLogger("juju.kubernetes.provider")
 
 const (
-	labelOperator        = "juju-operator"
-	labelStorage         = "juju-storage"
-	labelVersion         = "juju-version"
-	labelApplication     = "juju-app"
-	labelApplicationUUID = "juju-app-uuid"
-	labelModel           = "juju-model"
+	// Domain is the primary TLD for juju when giving resource domains to
+	// Kubernetes
+	Domain = "juju.is"
+
+	labelOperator    = "juju-operator"
+	labelStorage     = "juju-storage"
+	labelVersion     = "juju-version"
+	labelApplication = "juju-app"
+	labelModel       = "juju-model"
+
+	// annotationKeyApplicationUUID is the key of annotation for recording pvc unique ID.
+	annotationKeyApplicationUUID = "juju-app-uuid"
+
+	// labelResourceLifeCycleKey defines the label key for lifecycle of the global resources.
+	labelResourceLifeCycleKey             = "juju-resource-lifecycle"
+	labelResourceLifeCycleValueModel      = "model"
+	labelResourceLifeCycleValuePersistent = "persistent"
 
 	gpuAffinityNodeSelectorKey = "gpu"
 
@@ -80,6 +90,9 @@ const (
 	operatorContainerName = "juju-operator"
 
 	dataDirVolumeName = "juju-data-dir"
+
+	// InformerResyncPeriod is the default resync period set on IndexInformers
+	InformerResyncPeriod = time.Minute * 5
 
 	// OperatorPodIPEnvName is the environment name for operator pod IP.
 	OperatorPodIPEnvName = "JUJU_OPERATOR_POD_IP"
@@ -95,16 +108,17 @@ const (
 
 	// A set of constants defining history limits for certain k8s deployment
 	// types.
-	// TODO We may want to make these confiurable in the future
-	// DaemonsetRevisionHistoryLimit is the number of old history states to
+	// TODO We may want to make these configurable in the future.
+
+	// daemonsetRevisionHistoryLimit is the number of old history states to
 	// retain to allow rollbacks
-	DaemonsetRevisionHistoryLimit int32 = 0
-	// DeploymentRevisionHistoryLimit is the number of old ReplicaSets to retain
+	daemonsetRevisionHistoryLimit int32 = 0
+	// deploymentRevisionHistoryLimit is the number of old ReplicaSets to retain
 	// to allow rollback
-	DeploymentRevisionHistoryLimit int32 = 0
-	// StatefulsetRevisionHistoryLimit is the maximum number of revisions that
+	deploymentRevisionHistoryLimit int32 = 0
+	// statefulSetRevisionHistoryLimit is the maximum number of revisions that
 	// will be maintained in the StatefulSet's revision history
-	StatefulsetRevisionHistoryLimit int32 = 0
+	statefulSetRevisionHistoryLimit int32 = 0
 )
 
 var (
@@ -140,6 +154,9 @@ type kubernetesClient struct {
 	newWatcher        NewK8sWatcherFunc
 	newStringsWatcher NewK8sStringsWatcherFunc
 
+	// informerFactoryUnlocked informer factory setup for tracking this model
+	informerFactoryUnlocked informers.SharedInformerFactory
+
 	// randomPrefix generates an annotation for stateful sets.
 	randomPrefix RandomPrefixFunc
 }
@@ -157,6 +174,9 @@ type kubernetesClient struct {
 //go:generate mockgen -package mocks -destination mocks/discovery_mock.go k8s.io/client-go/discovery DiscoveryInterface
 //go:generate mockgen -package mocks -destination mocks/dynamic_mock.go -mock_names=Interface=MockDynamicInterface k8s.io/client-go/dynamic Interface,ResourceInterface,NamespaceableResourceInterface
 //go:generate mockgen -package mocks -destination mocks/admissionregistration_mock.go k8s.io/client-go/kubernetes/typed/admissionregistration/v1beta1  AdmissionregistrationV1beta1Interface,MutatingWebhookConfigurationInterface,ValidatingWebhookConfigurationInterface
+//go:generate mockgen -package mocks -destination mocks/serviceaccountinformer_mock.go k8s.io/client-go/informers/core/v1 ServiceAccountInformer
+//go:generate mockgen -package mocks -destination mocks/serviceaccountlister_mock.go k8s.io/client-go/listers/core/v1 ServiceAccountLister,ServiceAccountNamespaceLister
+//go:generate mockgen -package mocks -destination mocks/sharedindexinformer_mock.go k8s.io/client-go/tools/cache SharedIndexInformer
 
 // NewK8sClientFunc defines a function which returns a k8s client based on the supplied config.
 type NewK8sClientFunc func(c *rest.Config) (kubernetes.Interface, apiextensionsclientset.Interface, dynamic.Interface, error)
@@ -194,12 +214,17 @@ func newK8sBroker(
 		apiextensionsClientUnlocked: apiextensionsClient,
 		dynamicClientUnlocked:       dynamicClient,
 		envCfgUnlocked:              newCfg.Config,
-		namespace:                   newCfg.Name(),
-		modelUUID:                   modelUUID,
-		newWatcher:                  newWatcher,
-		newStringsWatcher:           newStringsWatcher,
-		newClient:                   newClient,
-		randomPrefix:                randomPrefix,
+		informerFactoryUnlocked: informers.NewSharedInformerFactoryWithOptions(
+			k8sClient,
+			InformerResyncPeriod,
+			informers.WithNamespace(newCfg.Name()),
+		),
+		namespace:         newCfg.Name(),
+		modelUUID:         modelUUID,
+		newWatcher:        newWatcher,
+		newStringsWatcher: newStringsWatcher,
+		newClient:         newClient,
+		randomPrefix:      randomPrefix,
 		annotations: k8sannotations.New(nil).
 			Add(annotationModelUUIDKey, modelUUID),
 	}
@@ -216,6 +241,12 @@ func (k *kubernetesClient) GetAnnotations() k8sannotations.Annotation {
 }
 
 var k8sversionNumberExtractor = regexp.MustCompile("[0-9]+")
+
+// MakeK8sDomain builds and returns a Kubernetes resource domain for the
+// provided components. Func is idempotent
+func MakeK8sDomain(components ...string) string {
+	return fmt.Sprintf("%s.%s", strings.Join(components, "."), Domain)
+}
 
 // Version returns cluster version information.
 func (k *kubernetesClient) Version() (ver *version.Number, err error) {
@@ -307,6 +338,12 @@ func (k *kubernetesClient) SetCloudSpec(spec environs.CloudSpec) error {
 	if err != nil {
 		return errors.Annotate(err, "cannot set cloud spec")
 	}
+
+	k.informerFactoryUnlocked = informers.NewSharedInformerFactoryWithOptions(
+		k.clientUnlocked,
+		InformerResyncPeriod,
+		informers.WithNamespace(k.namespace),
+	)
 	return nil
 }
 
@@ -448,6 +485,18 @@ func (k *kubernetesClient) DestroyController(ctx envcontext.ProviderCallContext,
 	return k.Destroy(ctx)
 }
 
+// SharedInformerFactory returns the default k8s SharedInformerFactory used by
+// this broker.
+func (k *kubernetesClient) SharedInformerFactory() informers.SharedInformerFactory {
+	k.lock.Lock()
+	defer k.lock.Unlock()
+	return k.informerFactoryUnlocked
+}
+
+func (k *kubernetesClient) CurrentModel() string {
+	return k.namespace
+}
+
 // Provider is part of the Broker interface.
 func (*kubernetesClient) Provider() caas.ContainerEnvironProvider {
 	return providerInstance
@@ -502,87 +551,6 @@ func (k *kubernetesClient) APIVersion() (string, error) {
 	return ver.String(), nil
 }
 
-// ValidateStorageClass returns an error if the storage config is not valid.
-func (k *kubernetesClient) ValidateStorageClass(config map[string]interface{}) error {
-	cfg, err := newStorageConfig(config)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	sc, err := k.getStorageClass(cfg.storageClass)
-	if err != nil {
-		return errors.NewNotValid(err, fmt.Sprintf("storage class %q", cfg.storageClass))
-	}
-	if cfg.storageProvisioner == "" {
-		return nil
-	}
-	if sc.Provisioner != cfg.storageProvisioner {
-		return errors.NewNotValid(
-			nil,
-			fmt.Sprintf("storage class %q has provisoner %q, not %q", cfg.storageClass, sc.Provisioner, cfg.storageProvisioner))
-	}
-	return nil
-}
-
-type volumeParams struct {
-	storageConfig       *storageConfig
-	pvcName             string
-	requestedVolumeSize resource.Quantity
-	accessMode          core.PersistentVolumeAccessMode
-}
-
-// maybeGetVolumeClaimSpec returns a persistent volume claim spec for the given
-// parameters. If no suitable storage class is available, return a NotFound error.
-func (k *kubernetesClient) maybeGetVolumeClaimSpec(params volumeParams) (*core.PersistentVolumeClaimSpec, error) {
-	storageClassName := params.storageConfig.storageClass
-	haveStorageClass := false
-	if storageClassName == "" {
-		return nil, errors.New("cannot create a volume claim spec without a storage class")
-	}
-	// See if the requested storage class exists already.
-	sc, err := k.getStorageClass(storageClassName)
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return nil, errors.Annotatef(err, "looking for storage class %q", storageClassName)
-	}
-	if err == nil {
-		haveStorageClass = true
-		storageClassName = sc.Name
-	}
-	if !haveStorageClass {
-		params.storageConfig.storageClass = storageClassName
-		sc, _, err := k.EnsureStorageProvisioner(caas.StorageProvisioner{
-			Name:          params.storageConfig.storageClass,
-			Namespace:     k.namespace,
-			Provisioner:   params.storageConfig.storageProvisioner,
-			Parameters:    params.storageConfig.parameters,
-			ReclaimPolicy: string(params.storageConfig.reclaimPolicy),
-		})
-		if err != nil && !errors.IsNotFound(err) {
-			return nil, errors.Trace(err)
-		}
-		if err == nil {
-			haveStorageClass = true
-			storageClassName = sc.Name
-		}
-	}
-	if !haveStorageClass {
-		return nil, errors.NewNotFound(nil, fmt.Sprintf(
-			"cannot create persistent volume as storage class %q cannot be found", storageClassName))
-	}
-	accessMode := params.accessMode
-	if accessMode == "" {
-		accessMode = core.ReadWriteOnce
-	}
-	return &core.PersistentVolumeClaimSpec{
-		StorageClassName: &storageClassName,
-		Resources: core.ResourceRequirements{
-			Requests: core.ResourceList{
-				core.ResourceStorage: params.requestedVolumeSize,
-			},
-		},
-		AccessModes: []core.PersistentVolumeAccessMode{accessMode},
-	}, nil
-}
-
 // getStorageClass returns a named storage class, first looking for
 // one which is qualified by the current namespace if it's available.
 func (k *kubernetesClient) getStorageClass(name string) (*k8sstorage.StorageClass, error) {
@@ -596,50 +564,6 @@ func (k *kubernetesClient) getStorageClass(name string) (*k8sstorage.StorageClas
 		return nil, errors.Trace(err)
 	}
 	return storageClasses.Get(name, v1.GetOptions{})
-}
-
-// EnsureStorageProvisioner creates a storage class with the specified config, or returns an existing one.
-func (k *kubernetesClient) EnsureStorageProvisioner(cfg caas.StorageProvisioner) (*caas.StorageProvisioner, bool, error) {
-	// First see if the named storage class exists.
-	sc, err := k.getStorageClass(cfg.Name)
-	if err == nil {
-		return toCaaSStorageProvisioner(*sc), true, nil
-	}
-	if !k8serrors.IsNotFound(err) {
-		return nil, false, errors.Annotatef(err, "getting storage class %q", cfg.Name)
-	}
-	// If it's not found but there's no provisioner specified, we can't
-	// create it so just return not found.
-	if cfg.Provisioner == "" {
-		return nil, false, errors.NewNotFound(nil,
-			fmt.Sprintf("storage class %q doesn't exist, but no storage provisioner has been specified",
-				cfg.Name))
-	}
-
-	// Create the storage class with the specified provisioner.
-	sc = &k8sstorage.StorageClass{
-		ObjectMeta: v1.ObjectMeta{
-			Name: qualifiedStorageClassName(cfg.Namespace, cfg.Name),
-		},
-		Provisioner: cfg.Provisioner,
-		Parameters:  cfg.Parameters,
-	}
-	if cfg.ReclaimPolicy != "" {
-		policy := core.PersistentVolumeReclaimPolicy(cfg.ReclaimPolicy)
-		sc.ReclaimPolicy = &policy
-	}
-	if cfg.VolumeBindingMode != "" {
-		bindMode := k8sstorage.VolumeBindingMode(cfg.VolumeBindingMode)
-		sc.VolumeBindingMode = &bindMode
-	}
-	if cfg.Namespace != "" {
-		sc.Labels = map[string]string{labelModel: k.namespace}
-	}
-	_, err = k.client().StorageV1().StorageClasses().Create(sc)
-	if err != nil {
-		return nil, false, errors.Annotatef(err, "creating storage class %q", cfg.Name)
-	}
-	return toCaaSStorageProvisioner(*sc), false, nil
 }
 
 func getLoadBalancerAddress(svc *core.Service) string {
@@ -705,10 +629,10 @@ func getSvcAddresses(svc *core.Service, includeClusterIP bool) []network.Provide
 }
 
 // GetService returns the service for the specified application.
-func (k *kubernetesClient) GetService(appName string, includeClusterIP bool) (*caas.Service, error) {
+func (k *kubernetesClient) GetService(appName string, mode caas.DeploymentMode, includeClusterIP bool) (*caas.Service, error) {
 	services := k.client().CoreV1().Services(k.namespace)
 	servicesList, err := services.List(v1.ListOptions{
-		LabelSelector: applicationSelector(appName),
+		LabelSelector: applicationSelector(appName, mode),
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -721,6 +645,9 @@ func (k *kubernetesClient) GetService(appName string, includeClusterIP bool) (*c
 		result.Addresses = getSvcAddresses(&service, includeClusterIP)
 	}
 
+	if mode == caas.ModeOperator {
+		appName = k.operatorName(appName)
+	}
 	deploymentName := k.deploymentName(appName)
 	statefulsets := k.client().AppsV1().StatefulSets(k.namespace)
 	ss, err := statefulsets.Get(deploymentName, v1.GetOptions{})
@@ -950,6 +877,17 @@ func processConstraints(pod *core.PodSpec, appName string, cons constraints.Valu
 	return nil
 }
 
+// ApplyRawK8sSpec applies raw k8s spec to the k8s cluster.
+func (k *kubernetesClient) ApplyRawK8sSpec(specStr string) error {
+	spec, err := k8sspecs.ParseRawK8sSpec(specStr)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	logger.Debugf("specStr -> %s", specStr)
+	logger.Debugf("spec -> %s", pretty.Sprint(spec))
+	return errors.NotImplementedf("raw k8s spec")
+}
+
 // EnsureService creates or updates a service for pods with the given params.
 func (k *kubernetesClient) EnsureService(
 	appName string,
@@ -1096,7 +1034,7 @@ func (k *kubernetesClient) EnsureService(
 		if err := k.ensureOCIImageSecret(imageSecretName, appName, &c.ImageDetails, annotations.Copy()); err != nil {
 			return errors.Annotatef(err, "creating secrets for container: %s", c.Name)
 		}
-		cleanups = append(cleanups, func() { k.deleteSecret(imageSecretName, "") })
+		cleanups = append(cleanups, func() { _ = k.deleteSecret(imageSecretName, "") })
 	}
 	// Add a deployment controller or stateful set configured to create the specified number of units/pods.
 	// Defensively check to see if a stateful set is already used.
@@ -1108,7 +1046,8 @@ func (k *kubernetesClient) EnsureService(
 		}
 	}
 	if params.Deployment.DeploymentType != caas.DeploymentStateful {
-		// TODO(caas): remove this check once `params.Deployment` is changed to be required.
+		// TODO(caas): make sure deployment type is immutable.
+		// Either not found or params.Deployment.DeploymentType == existing resource type.
 		_, err := k.getStatefulSet(deploymentName)
 		if err != nil && !errors.IsNotFound(err) {
 			return errors.Trace(err)
@@ -1119,10 +1058,8 @@ func (k *kubernetesClient) EnsureService(
 		}
 	}
 
-	if params.Deployment.DeploymentType != caas.DeploymentStateful {
-		if workloadSpec.Service != nil && workloadSpec.Service.ScalePolicy != "" {
-			return errors.NewNotValid(nil, fmt.Sprintf("ScalePolicy is only supported for %s applications", caas.DeploymentStateful))
-		}
+	if err = validateDeploymentType(params.Deployment.DeploymentType, params, workloadSpec); err != nil {
+		return errors.Trace(err)
 	}
 
 	hasService := !params.PodSpec.OmitServiceFrontend && !params.Deployment.ServiceType.IsOmit()
@@ -1164,25 +1101,35 @@ func (k *kubernetesClient) EnsureService(
 		if err := k.configureHeadlessService(appName, deploymentName, annotations.Copy()); err != nil {
 			return errors.Annotate(err, "creating or updating headless service")
 		}
-		cleanups = append(cleanups, func() { k.deleteService(headlessServiceName(deploymentName)) })
+		cleanups = append(cleanups, func() { _ = k.deleteService(headlessServiceName(deploymentName)) })
 		if err := k.configureStatefulSet(appName, deploymentName, annotations.Copy(), workloadSpec, params.PodSpec.Containers, &numPods, params.Filesystems); err != nil {
 			return errors.Annotate(err, "creating or updating StatefulSet")
 		}
-		cleanups = append(cleanups, func() { k.deleteDeployment(appName) })
+		cleanups = append(cleanups, func() { _ = k.deleteDeployment(appName) })
 	case caas.DeploymentStateless:
-		if err := k.configureDeployment(appName, deploymentName, annotations.Copy(), workloadSpec, params.PodSpec.Containers, &numPods); err != nil {
+		cleanUpDeployment, err := k.configureDeployment(appName, deploymentName, annotations.Copy(), workloadSpec, params.PodSpec.Containers, &numPods, params.Filesystems)
+		cleanups = append(cleanups, cleanUpDeployment...)
+		if err != nil {
 			return errors.Annotate(err, "creating or updating Deployment")
 		}
-		cleanups = append(cleanups, func() { k.deleteDeployment(appName) })
 	case caas.DeploymentDaemon:
-		cleanUpDaemonSet, err := k.configureDaemonSet(appName, deploymentName, annotations.Copy(), workloadSpec, params.PodSpec.Containers)
+		cleanUpDaemonSet, err := k.configureDaemonSet(appName, deploymentName, annotations.Copy(), workloadSpec, params.PodSpec.Containers, params.Filesystems)
+		cleanups = append(cleanups, cleanUpDaemonSet...)
 		if err != nil {
 			return errors.Annotate(err, "creating or updating DaemonSet")
 		}
-		cleanups = append(cleanups, cleanUpDaemonSet)
 	default:
 		// This should never happend because we have validated both in this method and in `charm.v6`.
 		return errors.NotSupportedf("deployment type %q", params.Deployment.DeploymentType)
+	}
+	return nil
+}
+
+func validateDeploymentType(t caas.DeploymentType, params *caas.ServiceParams, workloadSpec *workloadSpec) error {
+	if t != caas.DeploymentStateful {
+		if workloadSpec.Service != nil && workloadSpec.Service.ScalePolicy != "" {
+			return errors.NewNotValid(nil, fmt.Sprintf("ScalePolicy is only supported for %s applications", caas.DeploymentStateful))
+		}
 	}
 	return nil
 }
@@ -1266,102 +1213,23 @@ func (k *kubernetesClient) deleteAllPods(appName, deploymentName string) error {
 	return errors.Trace(err)
 }
 
-func (k *kubernetesClient) configureStorage(
-	podSpec *core.PodSpec,
-	statefulSet *apps.StatefulSetSpec,
-	appName,
-	randPrefix string,
-	legacy bool,
-	filesystems []storage.KubernetesFilesystemParams,
-) error {
-	baseDir, err := paths.StorageDir(CAASProviderType)
-	if err != nil {
-		return errors.Trace(err)
+type annotationGetter interface {
+	GetAnnotations() map[string]string
+}
+
+// This random snippet will be included to the pvc name so that if the same app
+// is deleted and redeployed again, the pvc retains a unique name.
+// Only generate it once, and record it on the workload resource annotations .
+func (k *kubernetesClient) getStorageUniqPrefix(getMeta func() (annotationGetter, error)) (string, error) {
+	r, err := getMeta()
+	if err == nil {
+		if uniqID := r.GetAnnotations()[annotationKeyApplicationUUID]; uniqID != "" {
+			return uniqID, nil
+		}
+	} else if !errors.IsNotFound(err) {
+		return "", errors.Trace(err)
 	}
-	logger.Debugf("configuring pod filesystems: %+v with rand %v", filesystems, randPrefix)
-	for i, fs := range filesystems {
-		var mountPath string
-		if fs.Attachment != nil {
-			mountPath = fs.Attachment.Path
-		}
-		if mountPath == "" {
-			mountPath = fmt.Sprintf("%s/fs/%s/%s/%d", baseDir, appName, fs.StorageName, i)
-		}
-		fsSize, err := resource.ParseQuantity(fmt.Sprintf("%dMi", fs.Size))
-		if err != nil {
-			return errors.Annotatef(err, "invalid volume size %v", fs.Size)
-		}
-
-		var volumeSource *core.VolumeSource
-		switch fs.Provider {
-		case K8s_ProviderType:
-		case provider.RootfsProviderType:
-			volumeSource = &core.VolumeSource{
-				EmptyDir: &core.EmptyDirVolumeSource{
-					SizeLimit: &fsSize,
-				},
-			}
-		case provider.TmpfsProviderType:
-			medium, ok := fs.Attributes[storageMedium]
-			if !ok {
-				medium = core.StorageMediumMemory
-			}
-			volumeSource = &core.VolumeSource{
-				EmptyDir: &core.EmptyDirVolumeSource{
-					Medium:    core.StorageMedium(fmt.Sprintf("%v", medium)),
-					SizeLimit: &fsSize,
-				},
-			}
-		default:
-			return errors.NotValidf("charm storage provider type %q for %v", fs.Provider, fs.StorageName)
-		}
-		if volumeSource != nil {
-			logger.Debugf("using emptyDir for %s filesystem %s", appName, fs.StorageName)
-			volName := fmt.Sprintf("%s-%d", fs.StorageName, i)
-			podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, core.VolumeMount{
-				Name:      volName,
-				MountPath: mountPath,
-			})
-			podSpec.Volumes = append(podSpec.Volumes, core.Volume{
-				Name:         volName,
-				VolumeSource: *volumeSource,
-			})
-			continue
-		}
-
-		pvcNamePrefix := fmt.Sprintf("%s-%s", fs.StorageName, randPrefix)
-		if legacy {
-			pvcNamePrefix = fmt.Sprintf("juju-%s-%d", fs.StorageName, i)
-		}
-		params := volumeParams{
-			pvcName:             pvcNamePrefix,
-			requestedVolumeSize: fsSize,
-		}
-		params.storageConfig, err = newStorageConfig(fs.Attributes)
-		if err != nil {
-			return errors.Annotatef(err, "invalid storage configuration for %v", fs.StorageName)
-		}
-		pvcSpec, err := k.maybeGetVolumeClaimSpec(params)
-		if err != nil {
-			return errors.Annotatef(err, "finding volume for %s", fs.StorageName)
-		}
-
-		pvc := core.PersistentVolumeClaim{
-			ObjectMeta: v1.ObjectMeta{
-				Name: params.pvcName,
-				Annotations: resourceTagsToAnnotations(fs.ResourceTags).
-					Add(labelStorage, fs.StorageName).ToMap(),
-			},
-			Spec: *pvcSpec,
-		}
-		logger.Debugf("using persistent volume claim for %s filesystem %s: %+v", appName, fs.StorageName, pvc)
-		statefulSet.VolumeClaimTemplates = append(statefulSet.VolumeClaimTemplates, pvc)
-		podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, core.VolumeMount{
-			Name:      pvc.Name,
-			MountPath: mountPath,
-		})
-	}
-	return nil
+	return k.randomPrefix()
 }
 
 func (k *kubernetesClient) configureDevices(unitSpec *workloadSpec, devices []devices.KubernetesDeviceParams) error {
@@ -1412,7 +1280,9 @@ func (k *kubernetesClient) configurePodFiles(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			pushUniqVolume(&workloadSpec.Pod, vol)
+			if err = pushUniqueVolume(&workloadSpec.Pod, vol); err != nil {
+				return errors.Trace(err)
+			}
 			workloadSpec.Pod.Containers[i].VolumeMounts = append(workloadSpec.Pod.Containers[i].VolumeMounts, core.VolumeMount{
 				// TODO(caas): add more config fields support(SubPath, ReadOnly, etc).
 				Name:      vol.Name,
@@ -1423,110 +1293,54 @@ func (k *kubernetesClient) configurePodFiles(
 	return nil
 }
 
-// pushUniqVolume ensures to only add unique volumes because k8s will not schedule pods if it has deplucated volumes.
-func pushUniqVolume(podSpec *core.PodSpec, vol core.Volume) {
-	for _, v := range podSpec.Volumes {
-		if reflect.DeepEqual(v, vol) {
-			return
+func (k *kubernetesClient) configureStorage(
+	appName string, legacy bool, uniquePrefix string,
+	filesystems []storage.KubernetesFilesystemParams,
+	podSpec *core.PodSpec,
+	handlePVC func(core.PersistentVolumeClaim, string, bool) error,
+) error {
+	pvcNameGetter := func(i int, storageName string) string {
+		s := fmt.Sprintf("%s-%s", storageName, uniquePrefix)
+		if legacy {
+			s = fmt.Sprintf("juju-%s-%d", storageName, i)
 		}
+		return s
 	}
-	podSpec.Volumes = append(podSpec.Volumes, vol)
-}
+	fsNames := set.NewStrings()
+	for i, fs := range filesystems {
+		if fsNames.Contains(fs.StorageName) {
+			return errors.NotValidf("duplicated storage name %q for %q", fs.StorageName, appName)
+		}
+		fsNames.Add(fs.StorageName)
 
-func (k *kubernetesClient) fileSetToVolume(
-	appName string,
-	annotations map[string]string,
-	workloadSpec *workloadSpec,
-	fileSet specs.FileSet,
-	cfgMapName configMapNameFunc,
-) (core.Volume, error) {
-	fileRefsToVolItems := func(fs []specs.FileRef) (out []core.KeyToPath) {
-		for _, f := range fs {
-			out = append(out, core.KeyToPath{
-				Key:  f.Key,
-				Path: f.Path,
-				Mode: f.Mode,
+		readOnly := false
+		if fs.Attachment != nil {
+			readOnly = fs.Attachment.ReadOnly
+		}
+
+		vol, pvc, err := k.filesystemToVolumeInfo(i, fs, pvcNameGetter)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		mountPath := getMountPathForFilesystem(i, appName, fs)
+		if vol != nil {
+			logger.Debugf("using volume for %s filesystem %s: %s", appName, fs.StorageName, pretty.Sprint(*vol))
+			if err = pushUniqueVolume(podSpec, *vol); err != nil {
+				return errors.Trace(err)
+			}
+			podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, core.VolumeMount{
+				Name:      vol.Name,
+				MountPath: mountPath,
 			})
 		}
-		return out
-	}
-
-	vol := core.Volume{Name: fileSet.Name}
-	if len(fileSet.Files) > 0 {
-		vol.Name = cfgMapName(fileSet.Name)
-		if _, err := k.ensureConfigMapLegacy(filesetConfigMap(vol.Name, k.getConfigMapLabels(appName), annotations, &fileSet)); err != nil {
-			return vol, errors.Annotatef(err, "creating or updating ConfigMap for file set %v", vol.Name)
-		}
-		vol.ConfigMap = &core.ConfigMapVolumeSource{
-			LocalObjectReference: core.LocalObjectReference{
-				Name: vol.Name,
-			},
-		}
-		for _, f := range fileSet.Files {
-			vol.ConfigMap.Items = append(vol.ConfigMap.Items, core.KeyToPath{
-				Key:  f.Path,
-				Path: f.Path,
-				Mode: f.Mode,
-			})
-		}
-	} else if fileSet.HostPath != nil {
-		t := core.HostPathType(fileSet.HostPath.Type)
-		vol.HostPath = &core.HostPathVolumeSource{
-			Path: fileSet.HostPath.Path,
-			Type: &t,
-		}
-	} else if fileSet.EmptyDir != nil {
-		vol.EmptyDir = &core.EmptyDirVolumeSource{
-			Medium:    core.StorageMedium(fileSet.EmptyDir.Medium),
-			SizeLimit: fileSet.EmptyDir.SizeLimit,
-		}
-	} else if fileSet.ConfigMap != nil {
-		found := false
-		refName := fileSet.ConfigMap.Name
-		for cfgN := range workloadSpec.ConfigMaps {
-			if cfgN == refName {
-				found = true
-				break
+		if pvc != nil && handlePVC != nil {
+			logger.Debugf("using persistent volume claim for %s filesystem %s: %s", appName, fs.StorageName, pretty.Sprint(*pvc))
+			if err = handlePVC(*pvc, mountPath, readOnly); err != nil {
+				return errors.Trace(err)
 			}
 		}
-		if !found {
-			return vol, errors.NewNotValid(nil, fmt.Sprintf(
-				"cannot mount a volume using a config map if the config map %q is not specified in the pod spec YAML", refName,
-			))
-		}
-
-		vol.ConfigMap = &core.ConfigMapVolumeSource{
-			LocalObjectReference: core.LocalObjectReference{
-				Name: refName,
-			},
-			DefaultMode: fileSet.ConfigMap.DefaultMode,
-			Items:       fileRefsToVolItems(fileSet.ConfigMap.Files),
-		}
-	} else if fileSet.Secret != nil {
-		found := false
-		refName := fileSet.Secret.Name
-		for _, secret := range workloadSpec.Secrets {
-			if secret.Name == refName {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return vol, errors.NewNotValid(nil, fmt.Sprintf(
-				"cannot mount a volume using a secret if the secret %q is not specified in the pod spec YAML", refName,
-			))
-		}
-
-		vol.Secret = &core.SecretVolumeSource{
-			SecretName:  refName,
-			DefaultMode: fileSet.Secret.DefaultMode,
-			Items:       fileRefsToVolItems(fileSet.Secret.Files),
-		}
-	} else {
-		// This should never happen because FileSet validation has been in k8s spec level.
-		return vol, errors.NotValidf("fileset %q is empty", fileSet.Name)
 	}
-	return vol, nil
+	return nil
 }
 
 func configureInitContainer(podSpec *core.PodSpec, operatorImagePath string) error {
@@ -1608,28 +1422,38 @@ func (k *kubernetesClient) configureDaemonSet(
 	annotations k8sannotations.Annotation,
 	workloadSpec *workloadSpec,
 	containers []specs.ContainerSpec,
-) (func(), error) {
+	filesystems []storage.KubernetesFilesystemParams,
+) (cleanUps []func(), err error) {
 	logger.Debugf("creating/updating daemon set for %s", appName)
-	cleanUp := func() {}
 
 	// Add the specified file to the pod spec.
 	cfgName := func(fileSetName string) string {
 		return applicationConfigMapName(deploymentName, fileSetName)
 	}
 	if err := k.configurePodFiles(appName, annotations, workloadSpec, containers, cfgName); err != nil {
-		return cleanUp, errors.Trace(err)
+		return cleanUps, errors.Trace(err)
+	}
+
+	storageUniqueID, err := k.getStorageUniqPrefix(func() (annotationGetter, error) {
+		return k.getDaemonSet(deploymentName)
+	})
+	if err != nil {
+		return cleanUps, errors.Trace(err)
 	}
 	daemonSet := &apps.DaemonSet{
 		ObjectMeta: v1.ObjectMeta{
-			Name:        deploymentName,
-			Labels:      k.getDaemonSetLabels(appName),
-			Annotations: annotations.ToMap()},
+			Name:   deploymentName,
+			Labels: k.getDaemonSetLabels(appName),
+			Annotations: k8sannotations.New(nil).
+				Merge(annotations).
+				Add(annotationKeyApplicationUUID, storageUniqueID).ToMap(),
+		},
 		Spec: apps.DaemonSetSpec{
 			// TODO(caas): DaemonSetUpdateStrategy support.
 			Selector: &v1.LabelSelector{
 				MatchLabels: k.getDaemonSetLabels(appName),
 			},
-			RevisionHistoryLimit: int32Ptr(DaemonsetRevisionHistoryLimit),
+			RevisionHistoryLimit: int32Ptr(daemonsetRevisionHistoryLimit),
 			Template: core.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					GenerateName: deploymentName + "-",
@@ -1640,7 +1464,20 @@ func (k *kubernetesClient) configureDaemonSet(
 			},
 		},
 	}
-	return k.ensureDaemonSet(daemonSet)
+	handlePVC := func(pvc core.PersistentVolumeClaim, mountPath string, readOnly bool) error {
+		cs, err := k.configurePVCForStatelessResource(pvc, mountPath, readOnly, &daemonSet.Spec.Template.Spec)
+		cleanUps = append(cleanUps, cs...)
+		return errors.Trace(err)
+	}
+	// Storage support for daemonset is new.
+	legacy := false
+	if err := k.configureStorage(appName, legacy, storageUniqueID, filesystems, &daemonSet.Spec.Template.Spec, handlePVC); err != nil {
+		return cleanUps, errors.Trace(err)
+	}
+
+	cU, err := k.ensureDaemonSet(daemonSet)
+	cleanUps = append(cleanUps, cU)
+	return cleanUps, errors.Trace(err)
 }
 
 func (k *kubernetesClient) configureDeployment(
@@ -1649,7 +1486,8 @@ func (k *kubernetesClient) configureDeployment(
 	workloadSpec *workloadSpec,
 	containers []specs.ContainerSpec,
 	replicas *int32,
-) error {
+	filesystems []storage.KubernetesFilesystemParams,
+) (cleanUps []func(), err error) {
 	logger.Debugf("creating/updating deployment for %s", appName)
 
 	// Add the specified file to the pod spec.
@@ -1657,17 +1495,27 @@ func (k *kubernetesClient) configureDeployment(
 		return applicationConfigMapName(deploymentName, fileSetName)
 	}
 	if err := k.configurePodFiles(appName, annotations, workloadSpec, containers, cfgName); err != nil {
-		return errors.Trace(err)
+		return cleanUps, errors.Trace(err)
+	}
+
+	storageUniqueID, err := k.getStorageUniqPrefix(func() (annotationGetter, error) {
+		return k.getDeployment(deploymentName)
+	})
+	if err != nil {
+		return cleanUps, errors.Trace(err)
 	}
 	deployment := &apps.Deployment{
 		ObjectMeta: v1.ObjectMeta{
-			Name:        deploymentName,
-			Labels:      map[string]string{labelApplication: appName},
-			Annotations: annotations.ToMap()},
+			Name:   deploymentName,
+			Labels: map[string]string{labelApplication: appName},
+			Annotations: k8sannotations.New(nil).
+				Merge(annotations).
+				Add(annotationKeyApplicationUUID, storageUniqueID).ToMap(),
+		},
 		Spec: apps.DeploymentSpec{
 			// TODO(caas): DeploymentStrategy support.
 			Replicas:             replicas,
-			RevisionHistoryLimit: int32Ptr(DeploymentRevisionHistoryLimit),
+			RevisionHistoryLimit: int32Ptr(deploymentRevisionHistoryLimit),
 			Selector: &v1.LabelSelector{
 				MatchLabels: map[string]string{labelApplication: appName},
 			},
@@ -1681,7 +1529,48 @@ func (k *kubernetesClient) configureDeployment(
 			},
 		},
 	}
-	return k.ensureDeployment(deployment)
+	handlePVC := func(pvc core.PersistentVolumeClaim, mountPath string, readOnly bool) error {
+		cs, err := k.configurePVCForStatelessResource(pvc, mountPath, readOnly, &deployment.Spec.Template.Spec)
+		cleanUps = append(cleanUps, cs...)
+		return errors.Trace(err)
+	}
+	// Storage support for deployment is new.
+	legacy := false
+	if err := k.configureStorage(appName, legacy, storageUniqueID, filesystems, &deployment.Spec.Template.Spec, handlePVC); err != nil {
+		return cleanUps, errors.Trace(err)
+	}
+	if err = k.ensureDeployment(deployment); err != nil {
+		return cleanUps, errors.Trace(err)
+	}
+	cleanUps = append(cleanUps, func() { _ = k.deleteDeployment(appName) })
+	return cleanUps, nil
+}
+
+func (k *kubernetesClient) configurePVCForStatelessResource(
+	spec core.PersistentVolumeClaim, mountPath string, readOnly bool, podSpec *core.PodSpec,
+) (cleanUps []func(), err error) {
+	pvc, pvcCleanUp, err := k.ensurePVC(&spec)
+	cleanUps = append(cleanUps, pvcCleanUp)
+	if err != nil {
+		return cleanUps, errors.Annotatef(err, "ensuring PVC %q", spec.GetName())
+	}
+	vol := core.Volume{
+		Name: pvc.GetName(),
+		VolumeSource: core.VolumeSource{
+			PersistentVolumeClaim: &core.PersistentVolumeClaimVolumeSource{
+				ClaimName: pvc.GetName(),
+				ReadOnly:  readOnly,
+			},
+		},
+	}
+	if err = pushUniqueVolume(podSpec, vol); err != nil {
+		return cleanUps, errors.Trace(err)
+	}
+	podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, core.VolumeMount{
+		Name:      vol.Name,
+		MountPath: mountPath,
+	})
+	return cleanUps, nil
 }
 
 func (k *kubernetesClient) ensureDeployment(spec *apps.Deployment) error {
@@ -1691,6 +1580,14 @@ func (k *kubernetesClient) ensureDeployment(spec *apps.Deployment) error {
 		_, err = deployments.Create(spec)
 	}
 	return errors.Trace(err)
+}
+
+func (k *kubernetesClient) getDeployment(name string) (*apps.Deployment, error) {
+	out, err := k.client().AppsV1().Deployments(k.namespace).Get(name, v1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		return nil, errors.NotFoundf("deployment %q", name)
+	}
+	return out, errors.Trace(err)
 }
 
 func (k *kubernetesClient) deleteDeployment(name string) error {
@@ -1942,15 +1839,22 @@ func (k *kubernetesClient) UnexposeService(appName string) error {
 }
 
 func operatorSelector(appName string) string {
-	return fmt.Sprintf("%v==%v", labelOperator, appName)
+	return labelSetToSelector(map[string]string{
+		labelOperator: appName,
+	}).String()
 }
 
-func applicationSelector(appName string) string {
-	return fmt.Sprintf("%v==%v", labelApplication, appName)
+func applicationSelector(appName string, mode caas.DeploymentMode) string {
+	if mode == caas.ModeOperator {
+		return operatorSelector(appName)
+	}
+	return labelSetToSelector(map[string]string{
+		labelApplication: appName,
+	}).String()
 }
 
 // AnnotateUnit annotates the specified pod (name or uid) with a unit tag.
-func (k *kubernetesClient) AnnotateUnit(appName, podName string, unit names.UnitTag) error {
+func (k *kubernetesClient) AnnotateUnit(appName string, mode caas.DeploymentMode, podName string, unit names.UnitTag) error {
 	pods := k.client().CoreV1().Pods(k.namespace)
 
 	pod, err := pods.Get(podName, v1.GetOptions{})
@@ -1959,7 +1863,7 @@ func (k *kubernetesClient) AnnotateUnit(appName, podName string, unit names.Unit
 			return errors.Trace(err)
 		}
 		pods, err := pods.List(v1.ListOptions{
-			LabelSelector: applicationSelector(appName),
+			LabelSelector: applicationSelector(appName, mode),
 		})
 		// TODO(caas): remove getting pod by Id (a bit expensive) once we started to store podName in cloudContainer doc.
 		if err != nil {
@@ -1995,8 +1899,8 @@ func (k *kubernetesClient) AnnotateUnit(appName, podName string, unit names.Unit
 
 // WatchUnits returns a watcher which notifies when there
 // are changes to units of the specified application.
-func (k *kubernetesClient) WatchUnits(appName string) (watcher.NotifyWatcher, error) {
-	selector := applicationSelector(appName)
+func (k *kubernetesClient) WatchUnits(appName string, mode caas.DeploymentMode) (watcher.NotifyWatcher, error) {
+	selector := applicationSelector(appName, mode)
 	logger.Debugf("selecting units %q to watch", selector)
 	factory := informers.NewSharedInformerFactoryWithOptions(k.client(), 0,
 		informers.WithNamespace(k.namespace),
@@ -2013,7 +1917,7 @@ func (k *kubernetesClient) WatchUnits(appName string) (watcher.NotifyWatcher, er
 // is used.
 func (k *kubernetesClient) WatchContainerStart(appName string, containerName string) (watcher.StringsWatcher, error) {
 	pods := k.client().CoreV1().Pods(k.namespace)
-	selector := applicationSelector(appName)
+	selector := applicationSelector(appName, caas.ModeWorkload)
 	logger.Debugf("selecting units %q to watch", selector)
 	factory := informers.NewSharedInformerFactoryWithOptions(k.client(), 0,
 		informers.WithNamespace(k.namespace),
@@ -2023,7 +1927,7 @@ func (k *kubernetesClient) WatchContainerStart(appName string, containerName str
 	)
 
 	podsList, err := pods.List(v1.ListOptions{
-		LabelSelector: applicationSelector(appName),
+		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -2088,14 +1992,14 @@ func (k *kubernetesClient) WatchContainerStart(appName string, containerName str
 
 // WatchService returns a watcher which notifies when there
 // are changes to the deployment of the specified application.
-func (k *kubernetesClient) WatchService(appName string) (watcher.NotifyWatcher, error) {
+func (k *kubernetesClient) WatchService(appName string, mode caas.DeploymentMode) (watcher.NotifyWatcher, error) {
 	// Application may be a statefulset or deployment. It may not have
 	// been set up when the watcher is started so we don't know which it
 	// is ahead of time. So use a multi-watcher to cover both cases.
 	factory := informers.NewSharedInformerFactoryWithOptions(k.client(), 0,
 		informers.WithNamespace(k.namespace),
 		informers.WithTweakListOptions(func(o *v1.ListOptions) {
-			o.LabelSelector = applicationSelector(appName)
+			o.LabelSelector = applicationSelector(appName, mode)
 		}),
 	)
 
@@ -2121,17 +2025,17 @@ var jujuPVNameRegexp = regexp.MustCompile(`^(?P<storageName>\D+)-\w+$`)
 
 // Units returns all units and any associated filesystems of the specified application.
 // Filesystems are mounted via volumes bound to the unit.
-func (k *kubernetesClient) Units(appName string) ([]caas.Unit, error) {
+func (k *kubernetesClient) Units(appName string, mode caas.DeploymentMode) ([]caas.Unit, error) {
 	pods := k.client().CoreV1().Pods(k.namespace)
 	podsList, err := pods.List(v1.ListOptions{
-		LabelSelector: applicationSelector(appName),
+		LabelSelector: applicationSelector(appName, mode),
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	var units []caas.Unit
-	now := time.Now()
+	now := k.clock.Now()
 	for _, p := range podsList.Items {
 		var ports []string
 		for _, c := range p.Spec.Containers {
@@ -2144,13 +2048,12 @@ func (k *kubernetesClient) Units(appName string) ([]caas.Unit, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		stateful := false
 		unitInfo := caas.Unit{
 			Id:       providerID(&p),
 			Address:  p.Status.PodIP,
 			Ports:    ports,
 			Dying:    terminated,
-			Stateful: stateful,
+			Stateful: isStateful(&p),
 			Status: status.StatusInfo{
 				Status:  unitStatus,
 				Message: statusMessage,
@@ -2211,121 +2114,6 @@ func (k *kubernetesClient) getPod(podName string) (*core.Pod, error) {
 		return nil, errors.Trace(err)
 	}
 	return pod, nil
-}
-
-func (k *kubernetesClient) volumeInfoForEmptyDir(vol core.Volume, volMount core.VolumeMount, now time.Time) (*caas.FilesystemInfo, error) {
-	size := uint64(0)
-	if vol.EmptyDir.SizeLimit != nil {
-		size = uint64(vol.EmptyDir.SizeLimit.Size())
-	}
-	return &caas.FilesystemInfo{
-		Size:         size,
-		FilesystemId: vol.Name,
-		MountPoint:   volMount.MountPath,
-		ReadOnly:     volMount.ReadOnly,
-		Status: status.StatusInfo{
-			Status: status.Attached,
-			Since:  &now,
-		},
-		Volume: caas.VolumeInfo{
-			VolumeId:   vol.Name,
-			Size:       size,
-			Persistent: false,
-			Status: status.StatusInfo{
-				Status: status.Attached,
-				Since:  &now,
-			},
-		},
-	}, nil
-}
-
-func (k *kubernetesClient) getPVC(claimName string) (*core.PersistentVolumeClaim, error) {
-	pvcs := k.client().CoreV1().PersistentVolumeClaims(k.namespace)
-	pvc, err := pvcs.Get(claimName, v1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		return nil, errors.NotFoundf("pvc not found")
-	} else if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return pvc, nil
-}
-
-func (k *kubernetesClient) volumeInfoForPVC(vol core.Volume, volMount core.VolumeMount, claimName string, now time.Time) (*caas.FilesystemInfo, error) {
-	pvClaims := k.client().CoreV1().PersistentVolumeClaims(k.namespace)
-	pvc, err := pvClaims.Get(claimName, v1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		// Ignore claims which don't exist (yet).
-		return nil, nil
-	}
-	if err != nil {
-		return nil, errors.Annotate(err, "unable to get persistent volume claim")
-	}
-
-	if pvc.Status.Phase == core.ClaimPending {
-		logger.Debugf(fmt.Sprintf("PersistentVolumeClaim for %v is pending", claimName))
-		return nil, nil
-	}
-
-	storageName := pvc.Labels[labelStorage]
-	if storageName == "" {
-		if valid := legacyJujuPVNameRegexp.MatchString(volMount.Name); valid {
-			storageName = legacyJujuPVNameRegexp.ReplaceAllString(volMount.Name, "$storageName")
-		} else if valid := jujuPVNameRegexp.MatchString(volMount.Name); valid {
-			storageName = jujuPVNameRegexp.ReplaceAllString(volMount.Name, "$storageName")
-		}
-	}
-
-	statusMessage := ""
-	since := now
-	if len(pvc.Status.Conditions) > 0 {
-		statusMessage = pvc.Status.Conditions[0].Message
-		since = pvc.Status.Conditions[0].LastProbeTime.Time
-	}
-	if statusMessage == "" {
-		// If there are any events for this pvc we can use the
-		// most recent to set the status.
-		eventList, err := k.getEvents(pvc.Name, "PersistentVolumeClaim")
-		if err != nil {
-			return nil, errors.Annotate(err, "unable to get events for PVC")
-		}
-		// Take the most recent event.
-		if count := len(eventList); count > 0 {
-			statusMessage = eventList[count-1].Message
-		}
-	}
-
-	pVolumes := k.client().CoreV1().PersistentVolumes()
-	pv, err := pVolumes.Get(pvc.Spec.VolumeName, v1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		// Ignore volumes which don't exist (yet).
-		return nil, nil
-	}
-	if err != nil {
-		return nil, errors.Annotate(err, "unable to get persistent volume")
-	}
-
-	return &caas.FilesystemInfo{
-		StorageName:  storageName,
-		Size:         uint64(vol.PersistentVolumeClaim.Size()),
-		FilesystemId: string(pvc.UID),
-		MountPoint:   volMount.MountPath,
-		ReadOnly:     volMount.ReadOnly,
-		Status: status.StatusInfo{
-			Status:  k.jujuFilesystemStatus(pvc.Status.Phase),
-			Message: statusMessage,
-			Since:   &since,
-		},
-		Volume: caas.VolumeInfo{
-			VolumeId:   pv.Name,
-			Size:       uint64(pv.Size()),
-			Persistent: pv.Spec.PersistentVolumeReclaimPolicy == core.PersistentVolumeReclaimRetain,
-			Status: status.StatusInfo{
-				Status:  k.jujuVolumeStatus(pv.Status.Phase),
-				Message: pv.Status.Message,
-				Since:   &since,
-			},
-		},
-	}, nil
 }
 
 func (k *kubernetesClient) getPODStatus(pod core.Pod, now time.Time) (string, status.Status, time.Time, error) {
@@ -2483,8 +2271,8 @@ type workloadSpec struct {
 
 	Secrets                         []k8sspecs.Secret
 	ConfigMaps                      map[string]specs.ConfigMap
-	ServiceAccounts                 []serviceAccountSpecGetter
-	CustomResourceDefinitions       map[string]apiextensionsv1beta1.CustomResourceDefinitionSpec
+	ServiceAccounts                 []k8sspecs.K8sRBACSpecConverter
+	CustomResourceDefinitions       []k8sspecs.K8sCustomResourceDefinitionSpec
 	CustomResources                 map[string][]unstructured.Unstructured
 	MutatingWebhookConfigurations   map[string][]admissionregistration.MutatingWebhook
 	ValidatingWebhookConfigurations map[string][]admissionregistration.ValidatingWebhook
@@ -2545,9 +2333,13 @@ func prepareWorkloadSpec(appName, deploymentName string, podSpec *specs.PodSpec,
 	spec.Service = podSpec.Service
 	spec.ConfigMaps = podSpec.ConfigMaps
 	if podSpec.ServiceAccount != nil {
-		// use application name for the service account if RBAC was requested.
+		// Use application name for the prime service account name.
 		podSpec.ServiceAccount.SetName(appName)
-		spec.ServiceAccounts = append(spec.ServiceAccounts, podSpec.ServiceAccount)
+		primeSA, err := k8sspecs.PrimeServiceAccountToK8sRBACResources(*podSpec.ServiceAccount)
+		if err != nil {
+			return nil, errors.Annotatef(err, "converting prime service account for app %q", appName)
+		}
+		spec.ServiceAccounts = append(spec.ServiceAccounts, primeSA)
 	}
 	if podSpec.ProviderPod != nil {
 		pSpec, ok := podSpec.ProviderPod.(*k8sspecs.K8sPodSpec)
@@ -2572,9 +2364,7 @@ func prepareWorkloadSpec(appName, deploymentName string, podSpec *specs.PodSpec,
 				spec.Pod.DNSPolicy = k8sResources.Pod.DNSPolicy
 				spec.Pod.HostNetwork = k8sResources.Pod.HostNetwork
 			}
-			for _, ksa := range k8sResources.ServiceAccounts {
-				spec.ServiceAccounts = append(spec.ServiceAccounts, &ksa)
-			}
+			spec.ServiceAccounts = append(spec.ServiceAccounts, &k8sResources.K8sRBACResources)
 		}
 		if podSpec.ServiceAccount != nil {
 			spec.Pod.ServiceAccountName = podSpec.ServiceAccount.GetName()
@@ -2658,15 +2448,6 @@ func (k *kubernetesClient) deploymentName(appName string) string {
 		return "juju-" + appName
 	}
 	return appName
-}
-
-func labelsToSelector(labels map[string]string) string {
-	var selectors []string
-	for k, v := range labels {
-		selectors = append(selectors, fmt.Sprintf("%v==%v", k, v))
-	}
-	sort.Strings(selectors) // for tests.
-	return strings.Join(selectors, ",")
 }
 
 func newUIDPreconditions(uid k8stypes.UID) *v1.Preconditions {
@@ -2777,10 +2558,17 @@ func headlessServiceName(deploymentName string) string {
 func providerID(pod *core.Pod) string {
 	// Pods managed by a stateful set use the pod name
 	// as the provider id as this is stable across pod restarts.
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind == "StatefulSet" {
-			return pod.Name
-		}
+	if isStateful(pod) {
+		return pod.Name
 	}
 	return string(pod.GetUID())
+}
+
+func isStateful(pod *core.Pod) bool {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "StatefulSet" {
+			return true
+		}
+	}
+	return false
 }

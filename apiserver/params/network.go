@@ -8,10 +8,6 @@ import (
 	"github.com/juju/juju/core/network"
 )
 
-// -----
-// Parameters field types.
-// -----
-
 // Subnet describes a single subnet within a network.
 type Subnet struct {
 	// CIDR of the subnet in IPv4 or IPv6 notation.
@@ -51,6 +47,15 @@ type Subnet struct {
 	// Status returns the status of the subnet, whether it is in use, not
 	// in use or terminating.
 	Status string `json:"status,omitempty"`
+}
+
+// SubnetV2 is used by versions of spaces/subnets APIs that must include
+// subnet ID in payloads.
+type SubnetV2 struct {
+	Subnet
+
+	// ID uniquely identifies the subnet.
+	ID string `json:"id,omitempty"`
 }
 
 // NetworkRoute describes a special route that should be added for a given
@@ -691,10 +696,6 @@ type MachinePorts struct {
 	SubnetTag  string `json:"subnet-tag"`
 }
 
-// -----
-// API request / response types.
-// -----
-
 // PortsResults holds the bulk operation result of an API call
 // that returns a slice of Port.
 type PortsResults struct {
@@ -915,7 +916,7 @@ type RenameSpaceParams struct {
 
 // RenameSpacesParams holds the arguments of the RenameSpaces API call.
 type RenameSpacesParams struct {
-	SpacesRenames []RenameSpaceParams `json:"rename-spaces"`
+	Changes []RenameSpaceParams `json:"changes"`
 }
 
 // CreateSpacesParams holds the arguments of the AddSpaces API call.
@@ -932,7 +933,7 @@ type CreateSpaceParamsV4 struct {
 	ProviderId string   `json:"provider-id,omitempty"`
 }
 
-// CreateSpacesParams olds the arguments of the AddSpaces API call.
+// CreateSpacesParams holds the arguments of the AddSpaces API call.
 type CreateSpacesParams struct {
 	Spaces []CreateSpaceParams `json:"spaces"`
 }
@@ -944,6 +945,58 @@ type CreateSpaceParams struct {
 	SpaceTag   string   `json:"space-tag"`
 	Public     bool     `json:"public"`
 	ProviderId string   `json:"provider-id,omitempty"`
+}
+
+// MoveSubnetsParam contains the information required to
+// move a collection of subnets into a space.
+type MoveSubnetsParam struct {
+	// SubnetTags identifies the subnets to move.
+	SubnetTags []string `json:"subnets"`
+
+	// SpaceTag identifies the space that the subnets will move to.
+	SpaceTag string `json:"space-tag"`
+
+	// Force, when true, moves the subnets despite existing constraints that
+	// might be violated by such a topology change.
+	Force bool `json:"force"`
+}
+
+// MoveSubnetsParams contains the arguments of MoveSubnets API call.
+type MoveSubnetsParams struct {
+	Args []MoveSubnetsParam `json:"args"`
+}
+
+// MovedSubnet represents the prior state of a relocated subnet.
+type MovedSubnet struct {
+	// SubnetTag identifies the subnet that was moved.
+	SubnetTag string `json:"subnet"`
+
+	// OldSpaceTag identifies the space that the subnet was in before being
+	// successfully moved.
+	OldSpaceTag string `json:"old-space"`
+
+	// CIDR identifies the moved CIDR in the subnet move.
+	CIDR string `json:"cidr"`
+}
+
+// MoveSubnetsResult contains the result of moving
+// a collection of subnets into a new space.
+type MoveSubnetsResult struct {
+	// MovedSubnets contains the prior state of relocated subnets.
+	MovedSubnets []MovedSubnet `json:"moved-subnets,omitempty"`
+
+	// NewSpaceTag identifies the space that the the subnets were moved to.
+	// It is intended to facilitate from/to confirmation messages without
+	// clients needing to match up parameters with results.
+	NewSpaceTag string `json:"new-space"`
+
+	// Error will be non-nil if the subnets could not be moved.
+	Error *Error `json:"error,omitempty"`
+}
+
+// MoveSubnetResults contains the results of a call to MoveSubnets.
+type MoveSubnetsResults struct {
+	Results []MoveSubnetsResult `json:"results"`
 }
 
 // ListSpacesResults holds the list of all available spaces.
@@ -1085,7 +1138,23 @@ type FanConfigEntry struct {
 	Overlay  string `json:"overlay"`
 }
 
-// FanConfigResult holds configuration for all fans in a model
+// FanConfigResult holds configuration for all fans in a model.
 type FanConfigResult struct {
 	Fans []FanConfigEntry `json:"fans"`
+}
+
+// CIDRParams contains a slice of subnet CIDRs used for querying subnets.
+type CIDRParams struct {
+	CIDRS []string `json:"cidrs"`
+}
+
+// SubnetsResult contains a collection of subnets or an error.
+type SubnetsResult struct {
+	Subnets []SubnetV2 `json:"subnets,omitempty"`
+	Error   *Error     `json:"error,omitempty"`
+}
+
+// SubnetsResults contains a collection of subnets results.
+type SubnetsResults struct {
+	Results []SubnetsResult `json:"results"`
 }

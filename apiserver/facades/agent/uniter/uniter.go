@@ -28,6 +28,7 @@ import (
 	"github.com/juju/juju/core/life"
 	corenetwork "github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/status"
+	"github.com/juju/juju/feature"
 	"github.com/juju/juju/network"
 	"github.com/juju/juju/state"
 	"github.com/juju/juju/state/stateenvirons"
@@ -48,6 +49,7 @@ type UniterAPI struct {
 	*common.ModelWatcher
 	*common.RebootRequester
 	*common.UpgradeSeriesAPI
+	*common.UnitStateAPI
 	*leadershipapiserver.LeadershipSettingsAccessor
 	meterstatus.MeterStatus
 	m                   *state.Model
@@ -76,7 +78,7 @@ type UniterAPI struct {
 }
 
 // UniterAPIV14 implements version (v14) of the Uniter API,
-// which adds GetPodSpec
+// which adds GetPodSpec, SetState and State.
 type UniterAPIV14 struct {
 	UniterAPI
 }
@@ -212,6 +214,7 @@ func NewUniterAPI(context facade.Context) (*UniterAPI, error) {
 		ModelWatcher:               common.NewModelWatcher(m, resources, authorizer),
 		RebootRequester:            common.NewRebootRequester(st, accessMachine),
 		UpgradeSeriesAPI:           common.NewExternalUpgradeSeriesAPI(st, resources, authorizer, accessMachine, accessUnit, logger),
+		UnitStateAPI:               common.NewExternalUnitStateAPI(st, resources, authorizer, accessUnit, logger),
 		LeadershipSettingsAccessor: leadershipSettingsAccessorFactory(st, leadershipChecker, resources, authorizer),
 		MeterStatus:                msAPI,
 		// TODO(fwereade): so *every* unit should be allowed to get/set its
@@ -2696,7 +2699,7 @@ func networkInfoResultsToV6(v7Results params.NetworkInfoResults) params.NetworkI
 	return params.NetworkInfoResultsV6{Results: results}
 }
 
-// Network Info implements UniterAPIV6 version of NetworkInfo by constructing an API V6 compatible result.
+// NetworkInfo implements UniterAPIV6 version of NetworkInfo by constructing an API V6 compatible result.
 func (u *UniterAPIV6) NetworkInfo(args params.NetworkInfoParams) (params.NetworkInfoResultsV6, error) {
 	v6Results, err := u.UniterAPI.NetworkInfo(args)
 	if err != nil {
@@ -2790,6 +2793,42 @@ func (u *UniterAPI) setPodSpecOperation(appTag string, spec *string, unitTag nam
 	return cm.SetPodSpecOperation(token, parsedAppTag, spec), nil
 }
 
+func (u *UniterAPI) setRawK8sSpecOperation(appTag string, spec *string, unitTag names.Tag, canAccessApp common.AuthFunc) (state.ModelOperation, error) {
+	controllerCfg, err := u.st.ControllerConfig()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if !controllerCfg.Features().Contains(feature.RawK8sSpec) {
+		return nil, errors.NewNotSupported(nil,
+			fmt.Sprintf("feature flag %q is required for setting raw k8s spec", feature.RawK8sSpec),
+		)
+	}
+
+	parsedAppTag, err := names.ParseApplicationTag(appTag)
+	if err != nil {
+		return nil, err
+	}
+	if !canAccessApp(parsedAppTag) {
+		return nil, common.ErrPerm
+	}
+	if spec != nil {
+		if _, err := k8sspecs.ParseRawK8sSpec(*spec); err != nil {
+			return nil, errors.Annotate(err, "invalid raw k8s spec")
+		}
+	}
+
+	cm, err := u.m.CAASModel()
+	if err != nil {
+		return nil, err
+	}
+
+	var token leadership.Token
+	if unitTag != nil {
+		token = u.leadershipChecker.LeadershipCheck(parsedAppTag.Id(), unitTag.Id())
+	}
+	return cm.SetRawK8sSpecOperation(token, parsedAppTag, spec), nil
+}
+
 // Mask the GetPodSpec method from the v13 API. The API reflection code
 // in rpc/rpcreflect/type.go:newMethod skips 2-argument methods, so
 // this removes the method as far as the RPC machinery is concerned.
@@ -2799,6 +2838,34 @@ func (u *UniterAPIV13) GetPodSpec(_, _ struct{}) {}
 
 // GetPodSpec gets the pod specs for a set of applications.
 func (u *UniterAPI) GetPodSpec(args params.Entities) (params.StringResults, error) {
+	return u.getContainerSpec(args, func(m caasSpecGetter) getSpecFunc {
+		return m.PodSpec
+	})
+}
+
+// Mask the GetRawK8sSpec method from the v14 API. The API reflection code
+// in rpc/rpcreflect/type.go:newMethod skips 2-argument methods, so
+// this removes the method as far as the RPC machinery is concerned.
+
+// GetRawK8sSpec isn't on the v14 API.
+func (u *UniterAPIV14) GetRawK8sSpec(_, _ struct{}) {}
+
+// GetRawK8sSpec gets the raw k8s specs for a set of applications.
+func (u *UniterAPI) GetRawK8sSpec(args params.Entities) (params.StringResults, error) {
+	return u.getContainerSpec(args, func(m caasSpecGetter) getSpecFunc {
+		return m.RawK8sSpec
+	})
+}
+
+type caasSpecGetter interface {
+	PodSpec(names.ApplicationTag) (string, error)
+	RawK8sSpec(names.ApplicationTag) (string, error)
+}
+
+type getSpecFunc func(names.ApplicationTag) (string, error)
+type getSpecFuncGetter func(caasSpecGetter) getSpecFunc
+
+func (u *UniterAPI) getContainerSpec(args params.Entities, getSpec getSpecFuncGetter) (params.StringResults, error) {
 	results := params.StringResults{
 		Results: make([]params.StringResult, len(args.Entities)),
 	}
@@ -2831,7 +2898,7 @@ func (u *UniterAPI) GetPodSpec(args params.Entities) (params.StringResults, erro
 			results.Results[i].Error = common.ServerError(err)
 			continue
 		}
-		spec, err := cm.PodSpec(tag)
+		spec, err := getSpec(cm)(tag)
 		if err != nil {
 			results.Results[i].Error = common.ServerError(err)
 			continue
@@ -3190,7 +3257,7 @@ func (u *UniterAPIV10) CloudAPIVersion(_, _ struct{}) {}
 func (u *UniterAPI) CloudAPIVersion() (params.StringResult, error) {
 	result := params.StringResult{}
 
-	configGetter := stateenvirons.EnvironConfigGetter{State: u.st, Model: u.m, NewContainerBroker: u.containerBrokerFunc}
+	configGetter := stateenvirons.EnvironConfigGetter{Model: u.m, NewContainerBroker: u.containerBrokerFunc}
 	spec, err := configGetter.CloudSpec()
 	if err != nil {
 		return result, common.ServerError(err)
@@ -3297,39 +3364,8 @@ func (u *UniterAPI) updateUnitNetworkInfoOperation(unitTag names.UnitTag, unit *
 // State isn't on the v14 API.
 func (u *UniterAPIV14) State(_ struct{}) {}
 
-// State returns the state persisted by the charm running in this unit.
-func (u *UniterAPI) State(args params.Entities) (params.UnitStateResults, error) {
-	canAccess, err := u.accessUnit()
-	if err != nil {
-		return params.UnitStateResults{}, errors.Trace(err)
-	}
-
-	res := make([]params.UnitStateResult, len(args.Entities))
-	for i, entity := range args.Entities {
-		unitTag, err := names.ParseUnitTag(entity.Tag)
-		if err != nil {
-			res[i].Error = common.ServerError(err)
-			continue
-		}
-
-		if !canAccess(unitTag) {
-			res[i].Error = common.ServerError(common.ErrPerm)
-			continue
-		}
-
-		unit, err := u.getUnit(unitTag)
-		if err != nil {
-			res[i].Error = common.ServerError(err)
-			continue
-		}
-
-		if res[i].State, err = unit.State(); err != nil {
-			res[i].Error = common.ServerError(err)
-		}
-	}
-
-	return params.UnitStateResults{Results: res}, nil
-}
+// SetState isn't on the v14 API.
+func (u *UniterAPIV14) SetState(_ struct{}) {}
 
 // CommitHookChanges isn't on the v14 API.
 func (u *UniterAPIV14) CommitHookChanges(_ struct{}) {}
@@ -3358,7 +3394,13 @@ func (u *UniterAPI) CommitHookChanges(args params.CommitHookChangesArgs) (params
 			continue
 		}
 
-		res[i].Error = common.ServerError(u.commitHookChangesForOneUnit(unitTag, arg, canAccessUnit, canAccessApp))
+		if err := u.commitHookChangesForOneUnit(unitTag, arg, canAccessUnit, canAccessApp); err != nil {
+			// Log quota-related errors to aid operators
+			if errors.IsQuotaLimitExceeded(err) {
+				logger.Errorf("%s: %v", unitTag, err)
+			}
+			res[i].Error = common.ServerError(err)
+		}
 	}
 
 	return params.ErrorResults{Results: res}, nil
@@ -3366,6 +3408,11 @@ func (u *UniterAPI) CommitHookChanges(args params.CommitHookChangesArgs) (params
 
 func (u *UniterAPI) commitHookChangesForOneUnit(unitTag names.UnitTag, changes params.CommitHookChangesArg, canAccessUnit, canAccessApp common.AuthFunc) error {
 	unit, err := u.getUnit(unitTag)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	ctrlCfg, err := u.st.ControllerConfig()
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -3438,17 +3485,47 @@ func (u *UniterAPI) commitHookChangesForOneUnit(unitTag names.UnitTag, changes p
 		if changes.SetUnitState.Tag != changes.Tag {
 			return common.ErrPerm
 		}
-		modelOp := unit.SetStateOperation(changes.SetUnitState.State)
+
+		newUS := state.NewUnitState()
+		if changes.SetUnitState.CharmState != nil {
+			newUS.SetCharmState(*changes.SetUnitState.CharmState)
+		}
+
+		// NOTE(achilleasa): The following state fields are not
+		// presently populated by the uniter calls to this API as they
+		// get persisted after the hook changes get committed. However,
+		// they are still checked here for future use and for ensuring
+		// symmetry with the SetState call (see apiserver/common).
+		if changes.SetUnitState.UniterState != nil {
+			newUS.SetUniterState(*changes.SetUnitState.UniterState)
+		}
+		if changes.SetUnitState.RelationState != nil {
+			newUS.SetRelationState(*changes.SetUnitState.RelationState)
+		}
+		if changes.SetUnitState.StorageState != nil {
+			newUS.SetStorageState(*changes.SetUnitState.StorageState)
+		}
+		if changes.SetUnitState.MeterStatusState != nil {
+			newUS.SetMeterStatusState(*changes.SetUnitState.MeterStatusState)
+		}
+
+		modelOp := unit.SetStateOperation(
+			newUS,
+			state.UnitStateSizeLimits{
+				MaxCharmStateSize: ctrlCfg.MaxCharmStateSize(),
+				MaxAgentStateSize: ctrlCfg.MaxAgentStateSize(),
+			},
+		)
 		modelOps = append(modelOps, modelOp)
 	}
 
 	for _, addParams := range changes.AddStorage {
-		// Ensure the tag in the request matches the root unit name
+		// Ensure the tag in the request matches the root unit name.
 		if addParams.UnitTag != changes.Tag {
 			return common.ErrPerm
 		}
 
-		curCons, err := unitStorageConstraints(u.backend, unitTag)
+		curCons, err := unitStorageConstraints(u.StorageAPI.backend, unitTag)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -3460,13 +3537,30 @@ func (u *UniterAPI) commitHookChangesForOneUnit(unitTag names.UnitTag, changes p
 		modelOps = append(modelOps, modelOp)
 	}
 
+	if changes.SetPodSpec != nil && changes.SetRawK8sSpec != nil {
+		return errors.NewForbidden(nil, "either SetPodSpec or SetRawK8sSpec can be set for each application, but not both")
+	}
+
 	if changes.SetPodSpec != nil {
 		// Ensure the application tag for the unit in the change arg
-		// matches the one specified in the SetPodSpec payload
+		// matches the one specified in the SetPodSpec payload.
 		if changes.SetPodSpec.Tag != appTag {
 			return errors.BadRequestf("application tag %q in SetPodSpec payload does not match the application for unit %q", changes.SetPodSpec.Tag, changes.Tag)
 		}
 		modelOp, err := u.setPodSpecOperation(changes.SetPodSpec.Tag, changes.SetPodSpec.Spec, unitTag, canAccessApp)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		modelOps = append(modelOps, modelOp)
+	}
+
+	if changes.SetRawK8sSpec != nil {
+		// Ensure the application tag for the unit in the change arg
+		// matches the one specified in the SetRawK8sSpec payload.
+		if changes.SetRawK8sSpec.Tag != appTag {
+			return errors.BadRequestf("application tag %q in SetRawK8sSpec payload does not match the application for unit %q", changes.SetRawK8sSpec.Tag, changes.Tag)
+		}
+		modelOp, err := u.setRawK8sSpecOperation(changes.SetRawK8sSpec.Tag, changes.SetRawK8sSpec.Spec, unitTag, canAccessApp)
 		if err != nil {
 			return errors.Trace(err)
 		}

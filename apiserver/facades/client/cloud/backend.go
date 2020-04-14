@@ -76,8 +76,9 @@ func (s stateShim) Model() (Model, error) {
 
 type Model interface {
 	UUID() string
-	Cloud() string
-	CloudCredential() (names.CloudCredentialTag, bool)
+	CloudName() string
+	Cloud() (cloud.Cloud, error)
+	CloudCredential() (state.Credential, bool, error)
 	CloudRegion() string
 }
 
@@ -106,7 +107,7 @@ func (s statePoolShim) GetModelCallContext(modelUUID string) (credentialcommon.P
 		return nil, nil, err
 	}
 	defer modelState.Release()
-	return credentialcommon.NewPersistentBackend(modelState.State), state.CallContext(modelState.State), err
+	return credentialcommon.NewPersistentBackend(modelState.State), context.CallContext(modelState.State), err
 }
 
 type User interface {

@@ -30,7 +30,6 @@ import (
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/cert"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/controller"
@@ -40,7 +39,6 @@ import (
 	"github.com/juju/juju/core/lxdprofile"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/paths"
-	"github.com/juju/juju/core/presence"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/environs/config"
@@ -150,8 +148,6 @@ func (s *JujuConnSuite) SetUpSuite(c *gc.C) {
 	s.MgoSuite.SetUpSuite(c)
 	s.FakeJujuXDGDataHomeSuite.SetUpSuite(c)
 	s.PatchValue(&utils.OutgoingAccessAllowed, false)
-	s.PatchValue(&cert.NewCA, testing.NewCA)
-	s.PatchValue(&cert.NewLeafKeyBits, 1024)
 	s.PatchValue(&paths.Chown, func(name string, uid, gid int) error { return nil })
 }
 
@@ -639,10 +635,10 @@ func (s *JujuConnSuite) setUpConn(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 
 	// Make sure the controller store has the controller api endpoint address set
-	controller, err := s.ControllerStore.ControllerByName(ControllerName)
+	ctrl, err := s.ControllerStore.ControllerByName(ControllerName)
 	c.Assert(err, jc.ErrorIsNil)
-	controller.APIEndpoints = []string{s.APIState.APIHostPorts()[0][0].String()}
-	err = s.ControllerStore.UpdateController(ControllerName, *controller)
+	ctrl.APIEndpoints = []string{s.APIState.APIHostPorts()[0][0].String()}
+	err = s.ControllerStore.UpdateController(ControllerName, *ctrl)
 	c.Assert(err, jc.ErrorIsNil)
 	err = s.ControllerStore.SetCurrentController(ControllerName)
 	c.Assert(err, jc.ErrorIsNil)
@@ -650,7 +646,7 @@ func (s *JujuConnSuite) setUpConn(c *gc.C) {
 	s.Environ = environ
 
 	// Insert expected values...
-	servingInfo := state.StateServingInfo{
+	servingInfo := controller.StateServingInfo{
 		PrivateKey:   testing.ServerKey,
 		Cert:         testing.ServerCert,
 		CAPrivateKey: testing.CAKey,
@@ -872,6 +868,13 @@ func (s *JujuConnSuite) DataDir() string {
 	return filepath.Join(s.RootDir, "/var/lib/juju")
 }
 
+func (s *JujuConnSuite) TransientDataDir() string {
+	if s.RootDir == "" {
+		panic("TransientDataDir called out of test context")
+	}
+	return filepath.Join(s.RootDir, "/var/run/juju")
+}
+
 func (s *JujuConnSuite) ConfDir() string {
 	if s.RootDir == "" {
 		panic("DataDir called out of test context")
@@ -942,14 +945,6 @@ func (s *JujuConnSuite) AgentConfigForTag(c *gc.C, tag names.Tag) agent.ConfigSe
 func (s *JujuConnSuite) AssertConfigParameterUpdated(c *gc.C, key string, value interface{}) {
 	err := s.Model.UpdateModelConfig(map[string]interface{}{key: value}, nil)
 	c.Assert(err, jc.ErrorIsNil)
-}
-
-type agentStatusSetter interface {
-	SetAgentStatus(agent string, status presence.Status)
-}
-
-func (s *JujuConnSuite) SetAgentPresence(agent string, status presence.Status) {
-	s.Environ.(agentStatusSetter).SetAgentStatus(agent, status)
 }
 
 // lxdCharmProfiler massages a charm.Charm into a LXDProfiler inside of the

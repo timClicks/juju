@@ -30,6 +30,7 @@ import (
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/caas"
 	k8s "github.com/juju/juju/caas/kubernetes/provider"
+	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/application"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/crossmodel"
@@ -40,11 +41,13 @@ import (
 	"github.com/juju/juju/core/permission"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/environs"
+	"github.com/juju/juju/feature"
 	"github.com/juju/juju/state"
 	"github.com/juju/juju/state/stateenvirons"
 	"github.com/juju/juju/storage"
 	"github.com/juju/juju/storage/poolmanager"
 	"github.com/juju/juju/tools"
+	jujuversion "github.com/juju/juju/version"
 )
 
 var logger = loggo.GetLogger("juju.apiserver.application")
@@ -217,7 +220,7 @@ func newFacadeBase(ctx facade.Context) (*APIBase, error) {
 		caasBroker         caas.Broker
 	)
 	if facadeModel.Type() == state.ModelTypeCAAS {
-		caasBroker, err = stateenvirons.GetNewCAASBrokerFunc(caas.New)(ctx.State())
+		caasBroker, err = stateenvirons.GetNewCAASBrokerFunc(caas.New)(facadeModel)
 		if err != nil {
 			return nil, errors.Annotate(err, "getting caas client")
 		}
@@ -501,12 +504,20 @@ func splitApplicationAndCharmConfigFromYAML(modelType state.ModelType, inYaml, a
 
 func caasPrecheck(
 	ch Charm,
+	controllerCfg controller.Config,
 	model Model,
 	args params.ApplicationDeploy,
 	storagePoolManager poolmanager.PoolManager,
 	registry storage.ProviderRegistry,
 	caasBroker caasBrokerInterface,
 ) error {
+	if ch.Meta().Deployment != nil && ch.Meta().Deployment.DeploymentMode == charm.ModeOperator {
+		if !controllerCfg.Features().Contains(feature.K8sOperators) {
+			return errors.Errorf(
+				"feature flag %q is required for deploying k8s operator charms", feature.K8sOperators,
+			)
+		}
+	}
 	if len(args.AttachStorage) > 0 {
 		return errors.Errorf(
 			"AttachStorage may not be specified for k8s models",
@@ -523,26 +534,30 @@ func caasPrecheck(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	storageClassName, _ := cfg.AllAttrs()[k8s.OperatorStorageKey].(string)
-	if storageClassName == "" {
-		return errors.New(
-			"deploying a Kubernetes application requires a suitable storage class.\n" +
-				"None have been configured. Set the operator-storage model config to " +
-				"specify which storage class should be used to allocate operator storage.\n" +
-				"See https://discourse.jujucharms.com/t/getting-started/152.",
-		)
-	}
-	sp, err := caasoperatorprovisioner.CharmStorageParams("", storageClassName, cfg, "", storagePoolManager, registry)
-	if err != nil {
-		return errors.Annotatef(err, "getting operator storage params for %q", args.ApplicationName)
-	}
-	if sp.Provider != string(k8s.K8s_ProviderType) {
-		poolName := cfg.AllAttrs()[k8s.OperatorStorageKey]
-		return errors.Errorf(
-			"the %q storage pool requires a provider type of %q, not %q", poolName, k8s.K8s_ProviderType, sp.Provider)
-	}
-	if err := caasBroker.ValidateStorageClass(sp.Attributes); err != nil {
-		return errors.Trace(err)
+
+	// For older charms, operator-storage model config is mandatory.
+	if k8s.RequireOperatorStorage(ch.Meta().MinJujuVersion) {
+		storageClassName, _ := cfg.AllAttrs()[k8s.OperatorStorageKey].(string)
+		if storageClassName == "" {
+			return errors.New(
+				"deploying a Kubernetes application requires a suitable storage class.\n" +
+					"None have been configured. Set the operator-storage model config to " +
+					"specify which storage class should be used to allocate operator storage.\n" +
+					"See https://discourse.jujucharms.com/t/getting-started/152.",
+			)
+		}
+		sp, err := caasoperatorprovisioner.CharmStorageParams("", storageClassName, cfg, "", storagePoolManager, registry)
+		if err != nil {
+			return errors.Annotatef(err, "getting operator storage params for %q", args.ApplicationName)
+		}
+		if sp.Provider != string(k8s.K8s_ProviderType) {
+			poolName := cfg.AllAttrs()[k8s.OperatorStorageKey]
+			return errors.Errorf(
+				"the %q storage pool requires a provider type of %q, not %q", poolName, k8s.K8s_ProviderType, sp.Provider)
+		}
+		if err := caasBroker.ValidateStorageClass(sp.Attributes); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	workloadStorageClass, _ := cfg.AllAttrs()[k8s.WorkloadStorageKey].(string)
@@ -599,13 +614,17 @@ func deployApplication(
 		return errors.Trace(err)
 	}
 
-	if err := checkJujuMinVersion(ch); err != nil {
+	if err := jujuversion.CheckJujuMinVersion(ch.Meta().MinJujuVersion, jujuversion.Current); err != nil {
 		return errors.Trace(err)
 	}
 
 	modelType := model.Type()
 	if modelType != state.ModelTypeIAAS {
-		if err := caasPrecheck(ch, model, args, storagePoolManager, registry, caasBroker); err != nil {
+		cfg, err := backend.ControllerConfig()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := caasPrecheck(ch, cfg, model, args, storagePoolManager, registry, caasBroker); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -1723,6 +1742,19 @@ func (api *APIBase) ScaleApplications(args params.ScaleApplicationsParams) (para
 		} else if err != nil {
 			return nil, errors.Trace(err)
 		}
+		ch, _, err := app.Charm()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if ch.Meta().Deployment != nil {
+			if ch.Meta().Deployment.DeploymentMode == charm.ModeOperator {
+				return nil, errors.NotSupportedf("scale an %q application", charm.ModeOperator)
+			}
+			if ch.Meta().Deployment.DeploymentType == charm.DeploymentDaemon {
+				return nil, errors.NotSupportedf("scale a %q application", charm.DeploymentDaemon)
+			}
+		}
+
 		var info params.ScaleApplicationInfo
 		if arg.ScaleChange != 0 {
 			newScale, err := app.ChangeScale(arg.ScaleChange)

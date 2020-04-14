@@ -26,7 +26,6 @@ import (
 	"github.com/juju/juju/agent"
 	agenttools "github.com/juju/juju/agent/tools"
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/constraints"
@@ -76,6 +75,10 @@ type InstanceConfig struct {
 	// on the new instance. Each of the entries in the list must have
 	// identical versions and hashes, but may have different URLs.
 	tools coretools.List
+
+	// TransientDataDir holds the directory that juju can use to write
+	// transient files that get purged after a system reboot.
+	TransientDataDir string
 
 	// DataDir holds the directory that juju state will be put in the new
 	// instance.
@@ -234,7 +237,7 @@ type BootstrapConfig struct {
 	// This is only specified for bootstrap; controllers started
 	// subsequently will acquire their serving info from another
 	// server.
-	StateServingInfo params.StateServingInfo
+	StateServingInfo controller.StateServingInfo
 
 	// JujuDbSnapPath is the path to a .snap file that will be used as the juju-db
 	// service.
@@ -463,9 +466,10 @@ func (cfg *InstanceConfig) AgentConfig(
 	}
 	configParams := agent.AgentConfigParams{
 		Paths: agent.Paths{
-			DataDir:         cfg.DataDir,
-			LogDir:          cfg.LogDir,
-			MetricsSpoolDir: cfg.MetricsSpoolDir,
+			DataDir:          cfg.DataDir,
+			TransientDataDir: cfg.TransientDataDir,
+			LogDir:           cfg.LogDir,
+			MetricsSpoolDir:  cfg.MetricsSpoolDir,
 		},
 		Jobs:              cfg.Jobs,
 		Tag:               tag,

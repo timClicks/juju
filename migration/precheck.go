@@ -52,7 +52,7 @@ type PrecheckModel interface {
 	Owner() names.UserTag
 	Life() state.Life
 	MigrationMode() state.MigrationMode
-	CloudCredential() (names.CloudCredentialTag, bool)
+	CloudCredentialTag() (names.CloudCredentialTag, bool)
 }
 
 // PrecheckMachine describes the state interface for a machine needed
@@ -62,7 +62,6 @@ type PrecheckMachine interface {
 	AgentTools() (*tools.Tools, error)
 	Life() state.Life
 	Status() (status.StatusInfo, error)
-	AgentPresence() (bool, error)
 	InstanceStatus() (status.StatusInfo, error)
 	ShouldRebootOrShutdown() (state.RebootAction, error)
 }
@@ -86,7 +85,6 @@ type PrecheckUnit interface {
 	CharmURL() (*charm.URL, bool)
 	AgentStatus() (status.StatusInfo, error)
 	Status() (status.StatusInfo, error)
-	AgentPresence() (bool, error)
 	ShouldBeAssigned() bool
 }
 
@@ -172,7 +170,7 @@ func (ctx *precheckContext) checkModel() error {
 	if model.MigrationMode() == state.MigrationModeImporting {
 		return errors.New("model is being imported as part of another migration")
 	}
-	if credTag, found := model.CloudCredential(); found {
+	if credTag, found := model.CloudCredentialTag(); found {
 		creds, err := ctx.backend.CloudCredential(credTag)
 		if err != nil {
 			return errors.Trace(err)

@@ -22,7 +22,7 @@ import (
 // StateBackend provides an interface for upgrading the global state database.
 type StateBackend interface {
 	ControllerUUID() string
-	StateServingInfo() (state.StateServingInfo, error)
+	StateServingInfo() (controller.StateServingInfo, error)
 	ControllerConfig() (controller.Config, error)
 	LeaseNotifyTarget(io.Writer, raftleasestore.Logger) raftlease.NotifyTarget
 
@@ -77,6 +77,8 @@ type StateBackend interface {
 	EnsureDefaultSpaceSetting() error
 	RemoveControllerConfigMaxLogAgeAndSize() error
 	IncrementTasksSequence() error
+	AddMachineIDToSubordinates() error
+	DropPresenceDatabase() error
 }
 
 // Model is an interface providing access to the details of a model within the
@@ -99,7 +101,7 @@ func (s stateBackend) ControllerUUID() string {
 	return s.pool.SystemState().ControllerUUID()
 }
 
-func (s stateBackend) StateServingInfo() (state.StateServingInfo, error) {
+func (s stateBackend) StateServingInfo() (controller.StateServingInfo, error) {
 	return s.pool.SystemState().StateServingInfo()
 }
 
@@ -312,4 +314,12 @@ func (s stateBackend) RemoveControllerConfigMaxLogAgeAndSize() error {
 
 func (s stateBackend) IncrementTasksSequence() error {
 	return state.IncrementTasksSequence(s.pool)
+}
+
+func (s stateBackend) AddMachineIDToSubordinates() error {
+	return state.AddMachineIDToSubordinates(s.pool)
+}
+
+func (s stateBackend) DropPresenceDatabase() error {
+	return state.DropPresenceDatabase(s.pool)
 }

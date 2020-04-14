@@ -29,6 +29,7 @@ type State struct {
 	*common.ModelWatcher
 	*common.APIAddresser
 	*common.UpgradeSeriesAPI
+	*common.UnitStateAPI
 	*StorageAccessor
 
 	LeadershipSettings *LeadershipSettingsAccessor
@@ -50,6 +51,7 @@ func NewState(
 		ModelWatcher:     common.NewModelWatcher(facadeCaller),
 		APIAddresser:     common.NewAPIAddresser(facadeCaller),
 		UpgradeSeriesAPI: common.NewUpgradeSeriesAPI(facadeCaller, authTag),
+		UnitStateAPI:     common.NewUniterStateAPI(facadeCaller, authTag),
 		StorageAccessor:  NewStorageAccessor(facadeCaller),
 		facade:           facadeCaller,
 		unitTag:          authTag,
@@ -315,6 +317,7 @@ func (st *State) RelationById(id int) (*Relation, error) {
 	args := params.RelationIds{
 		RelationIds: []int{id},
 	}
+
 	err := st.facade.FacadeCall("RelationById", args, &results)
 	if err != nil {
 		return nil, err
@@ -538,6 +541,33 @@ func (st *State) GetPodSpec(appName string) (string, error) {
 	if err := result.Results[0].Error; err != nil {
 		if params.IsCodeNotFound(result.Results[0].Error) {
 			return "", errors.NotFoundf("podspec for application %s", appName)
+		}
+		return "", err
+	}
+	return result.Results[0].Result, nil
+}
+
+// GetRawK8sSpec gets the raw k8s spec of the specified application.
+func (st *State) GetRawK8sSpec(appName string) (string, error) {
+	if !names.IsValidApplication(appName) {
+		return "", errors.NotValidf("application name %q", appName)
+	}
+	tag := names.NewApplicationTag(appName)
+	var result params.StringResults
+	args := params.Entities{
+		Entities: []params.Entity{{
+			Tag: tag.String(),
+		}},
+	}
+	if err := st.facade.FacadeCall("GetRawK8sSpec", args, &result); err != nil {
+		return "", errors.Trace(err)
+	}
+	if len(result.Results) != 1 {
+		return "", fmt.Errorf("expected 1 result, got %d", len(result.Results))
+	}
+	if err := result.Results[0].Error; err != nil {
+		if params.IsCodeNotFound(result.Results[0].Error) {
+			return "", errors.NotFoundf("raw k8s spec for application %s", appName)
 		}
 		return "", err
 	}

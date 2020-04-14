@@ -18,7 +18,6 @@ import (
 
 	"github.com/juju/juju/agent"
 	apiagent "github.com/juju/juju/api/agent"
-	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/caas"
 	k8sprovider "github.com/juju/juju/caas/kubernetes/provider"
 	"github.com/juju/juju/cloud"
@@ -29,6 +28,8 @@ import (
 	corenetwork "github.com/juju/juju/core/network"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/config"
+	"github.com/juju/juju/environs/context"
+	"github.com/juju/juju/environs/space"
 	"github.com/juju/juju/mongo"
 	"github.com/juju/juju/network"
 	"github.com/juju/juju/state"
@@ -169,7 +170,8 @@ func InitializeState(
 	// We need to do this before setting the API host-ports,
 	// because any space names in the bootstrap machine addresses must be
 	// reconcilable with space IDs at that point.
-	if err = st.ReloadSpaces(env); err != nil {
+	ctx := context.CallContext(st)
+	if err = space.ReloadSpaces(ctx, st, env); err != nil {
 		if errors.IsNotSupported(err) {
 			logger.Debugf("Not performing spaces load on a non-networking environment")
 		} else {
@@ -188,8 +190,7 @@ func InitializeState(
 	if err = initAPIHostPorts(st, args.BootstrapMachineAddresses, servingInfo.APIPort); err != nil {
 		return nil, err
 	}
-	ssi := paramsStateServingInfoToStateStateServingInfo(servingInfo)
-	if err := st.SetStateServingInfo(ssi); err != nil {
+	if err := st.SetStateServingInfo(servingInfo); err != nil {
 		return nil, errors.Errorf("cannot set state serving info: %v", err)
 	}
 
@@ -330,7 +331,7 @@ func ensureHostedModel(
 	}
 
 	if err := hostedModelEnv.Create(
-		state.CallContext(st),
+		context.CallContext(st),
 		environs.CreateParams{
 			ControllerUUID: controllerUUID,
 		}); err != nil {
@@ -363,7 +364,8 @@ func ensureHostedModel(
 	}
 
 	// TODO(wpk) 2017-05-24 Copy subnets/spaces from controller model
-	if err = hostedModelState.ReloadSpaces(hostedModelEnv); err != nil {
+	ctx := context.CallContext(hostedModelState)
+	if err = space.ReloadSpaces(ctx, hostedModelState, hostedModelEnv); err != nil {
 		if errors.IsNotSupported(err) {
 			logger.Debugf("Not performing spaces load on a non-networking environment")
 		} else {
@@ -388,18 +390,6 @@ func getEnviron(
 		return caas.Open(provider, openParams)
 	}
 	return environs.Open(provider, openParams)
-}
-
-func paramsStateServingInfoToStateStateServingInfo(i params.StateServingInfo) state.StateServingInfo {
-	return state.StateServingInfo{
-		APIPort:        i.APIPort,
-		StatePort:      i.StatePort,
-		Cert:           i.Cert,
-		PrivateKey:     i.PrivateKey,
-		CAPrivateKey:   i.CAPrivateKey,
-		SharedSecret:   i.SharedSecret,
-		SystemIdentity: i.SystemIdentity,
-	}
 }
 
 func initRaft(agentConfig agent.Config) error {
@@ -513,7 +503,7 @@ func initControllerCloudService(
 		// this should never happen.
 		return errors.Errorf("environ %T does not implement ServiceGetterSetter interface", env)
 	}
-	svc, err := broker.GetService(k8sprovider.JujuControllerStackName, true)
+	svc, err := broker.GetService(k8sprovider.JujuControllerStackName, caas.ModeWorkload, true)
 	if err != nil {
 		return errors.Trace(err)
 	}

@@ -40,9 +40,11 @@ func (rh *runHook) String() string {
 	switch {
 	case rh.info.Kind.IsRelation():
 		if rh.info.RemoteUnit == "" {
-			suffix = fmt.Sprintf(" (%d)", rh.info.RelationId)
+			suffix = fmt.Sprintf(" (%d; app: %s)", rh.info.RelationId, rh.info.RemoteApplication)
+		} else if rh.info.DepartingUnit != "" {
+			suffix = fmt.Sprintf(" (%d; unit: %s, departee: %s)", rh.info.RelationId, rh.info.RemoteUnit, rh.info.DepartingUnit)
 		} else {
-			suffix = fmt.Sprintf(" (%d; %s)", rh.info.RelationId, rh.info.RemoteUnit)
+			suffix = fmt.Sprintf(" (%d; unit: %s)", rh.info.RelationId, rh.info.RemoteUnit)
 		}
 	case rh.info.Kind.IsStorage():
 		suffix = fmt.Sprintf(" (%s)", rh.info.StorageId)
@@ -117,7 +119,7 @@ func (rh *runHook) Execute(state State) (*State, error) {
 	rh.hookFound = true
 	step := Done
 
-	err := rh.runner.RunHook(rh.name)
+	handlerType, err := rh.runner.RunHook(rh.name)
 	cause := errors.Cause(err)
 	switch {
 	case charmrunner.IsMissingHookError(cause):
@@ -130,13 +132,13 @@ func (rh *runHook) Execute(state State) (*State, error) {
 		err = ErrNeedsReboot
 	case err == nil:
 	default:
-		logger.Errorf("hook %q failed: %v", rh.name, err)
+		logger.Errorf("hook %q (via %s) failed: %v", rh.name, handlerType, err)
 		rh.callbacks.NotifyHookFailed(rh.name, rh.runner.Context())
 		return nil, ErrHookFailed
 	}
 
 	if rh.hookFound {
-		logger.Infof("ran %q hook", rh.name)
+		logger.Infof("ran %q hook (via %s)", rh.name, handlerType)
 		rh.callbacks.NotifyHookCompleted(rh.name, rh.runner.Context())
 	} else {
 		logger.Infof("skipped %q hook (missing)", rh.name)

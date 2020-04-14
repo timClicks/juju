@@ -4,17 +4,13 @@
 package caasoperatorprovisioner_test
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/pem"
 
 	"github.com/juju/errors"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
+	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/common"
@@ -22,6 +18,7 @@ import (
 	"github.com/juju/juju/apiserver/params"
 	apiservertesting "github.com/juju/juju/apiserver/testing"
 	"github.com/juju/juju/core/life"
+	"github.com/juju/juju/pki"
 	"github.com/juju/juju/state"
 	coretesting "github.com/juju/juju/testing"
 	jujuversion "github.com/juju/juju/version"
@@ -130,79 +127,113 @@ func (s *CAASProvisionerSuite) TestLife(c *gc.C) {
 }
 
 func (s *CAASProvisionerSuite) TestOperatorProvisioningInfoDefault(c *gc.C) {
-	result, err := s.api.OperatorProvisioningInfo()
+	s.st.app = &mockApplication{
+		charm: &mockCharm{meta: &charm.Meta{}},
+	}
+	result, err := s.api.OperatorProvisioningInfo(params.Entities{Entities: []params.Entity{{"application-gitlab"}}})
 	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfo{
-		ImagePath:    "jujusolutions/jujud-operator:2.6-beta3.666",
-		Version:      version.MustParse("2.6-beta3"),
-		APIAddresses: []string{"10.0.0.1:1"},
-		Tags: map[string]string{
-			"juju-model-uuid":      coretesting.ModelTag.Id(),
-			"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		CharmStorage: params.KubernetesFilesystemParams{
-			StorageName: "charm",
-			Size:        uint64(1024),
-			Provider:    "kubernetes",
-			Attributes: map[string]interface{}{
-				"storage-class": "k8s-storage",
-				"foo":           "bar",
-			},
+	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfoResults{
+		Results: []params.OperatorProvisioningInfo{{
+			ImagePath:    "jujusolutions/jujud-operator:2.6-beta3.666",
+			Version:      version.MustParse("2.6-beta3"),
+			APIAddresses: []string{"10.0.0.1:1"},
 			Tags: map[string]string{
 				"juju-model-uuid":      coretesting.ModelTag.Id(),
 				"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		},
+			CharmStorage: &params.KubernetesFilesystemParams{
+				StorageName: "charm",
+				Size:        uint64(1024),
+				Provider:    "kubernetes",
+				Attributes: map[string]interface{}{
+					"storage-class": "k8s-storage",
+					"foo":           "bar",
+				},
+				Tags: map[string]string{
+					"juju-model-uuid":      coretesting.ModelTag.Id(),
+					"juju-controller-uuid": coretesting.ControllerTag.Id()},
+			},
+		}},
 	})
 }
 
 func (s *CAASProvisionerSuite) TestOperatorProvisioningInfo(c *gc.C) {
 	s.st.operatorRepo = "somerepo"
-	result, err := s.api.OperatorProvisioningInfo()
+	s.st.app = &mockApplication{
+		charm: &mockCharm{meta: &charm.Meta{}},
+	}
+	result, err := s.api.OperatorProvisioningInfo(params.Entities{Entities: []params.Entity{{"application-gitlab"}}})
 	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfo{
-		ImagePath:    s.st.operatorRepo + "/jujud-operator:" + "2.6-beta3.666",
-		Version:      version.MustParse("2.6-beta3"),
-		APIAddresses: []string{"10.0.0.1:1"},
-		Tags: map[string]string{
-			"juju-model-uuid":      coretesting.ModelTag.Id(),
-			"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		CharmStorage: params.KubernetesFilesystemParams{
-			StorageName: "charm",
-			Size:        uint64(1024),
-			Provider:    "kubernetes",
-			Attributes: map[string]interface{}{
-				"storage-class": "k8s-storage",
-				"foo":           "bar",
-			},
+	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfoResults{
+		Results: []params.OperatorProvisioningInfo{{
+			ImagePath:    s.st.operatorRepo + "/jujud-operator:" + "2.6-beta3.666",
+			Version:      version.MustParse("2.6-beta3"),
+			APIAddresses: []string{"10.0.0.1:1"},
 			Tags: map[string]string{
 				"juju-model-uuid":      coretesting.ModelTag.Id(),
 				"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		},
+			CharmStorage: &params.KubernetesFilesystemParams{
+				StorageName: "charm",
+				Size:        uint64(1024),
+				Provider:    "kubernetes",
+				Attributes: map[string]interface{}{
+					"storage-class": "k8s-storage",
+					"foo":           "bar",
+				},
+				Tags: map[string]string{
+					"juju-model-uuid":      coretesting.ModelTag.Id(),
+					"juju-controller-uuid": coretesting.ControllerTag.Id()},
+			},
+		}},
+	})
+}
+
+func (s *CAASProvisionerSuite) TestOperatorProvisioningInfoNoStorage(c *gc.C) {
+	s.st.operatorRepo = "somerepo"
+	s.st.app = &mockApplication{
+		charm: &mockCharm{meta: &charm.Meta{MinJujuVersion: version.MustParse("2.8.0")}},
+	}
+	result, err := s.api.OperatorProvisioningInfo(params.Entities{Entities: []params.Entity{{"application-gitlab"}}})
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfoResults{
+		Results: []params.OperatorProvisioningInfo{{
+			ImagePath:    s.st.operatorRepo + "/jujud-operator:" + "2.6-beta3.666",
+			Version:      version.MustParse("2.6-beta3"),
+			APIAddresses: []string{"10.0.0.1:1"},
+			Tags: map[string]string{
+				"juju-model-uuid":      coretesting.ModelTag.Id(),
+				"juju-controller-uuid": coretesting.ControllerTag.Id()},
+		}},
 	})
 }
 
 func (s *CAASProvisionerSuite) TestOperatorProvisioningInfoNoStoragePool(c *gc.C) {
 	s.storagePoolManager.SetErrors(errors.NotFoundf("pool"))
 	s.st.operatorRepo = "somerepo"
-	result, err := s.api.OperatorProvisioningInfo()
+	s.st.app = &mockApplication{
+		charm: &mockCharm{meta: &charm.Meta{MinJujuVersion: version.MustParse("2.7.0")}},
+	}
+	result, err := s.api.OperatorProvisioningInfo(params.Entities{Entities: []params.Entity{{"application-gitlab"}}})
 	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfo{
-		ImagePath:    s.st.operatorRepo + "/jujud-operator:" + "2.6-beta3.666",
-		Version:      version.MustParse("2.6-beta3"),
-		APIAddresses: []string{"10.0.0.1:1"},
-		Tags: map[string]string{
-			"juju-model-uuid":      coretesting.ModelTag.Id(),
-			"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		CharmStorage: params.KubernetesFilesystemParams{
-			StorageName: "charm",
-			Size:        uint64(1024),
-			Provider:    "kubernetes",
-			Attributes: map[string]interface{}{
-				"storage-class": "k8s-storage",
-			},
+	c.Assert(result, jc.DeepEquals, params.OperatorProvisioningInfoResults{
+		Results: []params.OperatorProvisioningInfo{{
+			ImagePath:    s.st.operatorRepo + "/jujud-operator:" + "2.6-beta3.666",
+			Version:      version.MustParse("2.6-beta3"),
+			APIAddresses: []string{"10.0.0.1:1"},
 			Tags: map[string]string{
 				"juju-model-uuid":      coretesting.ModelTag.Id(),
 				"juju-controller-uuid": coretesting.ControllerTag.Id()},
-		},
+			CharmStorage: &params.KubernetesFilesystemParams{
+				StorageName: "charm",
+				Size:        uint64(1024),
+				Provider:    "kubernetes",
+				Attributes: map[string]interface{}{
+					"storage-class": "k8s-storage",
+				},
+				Tags: map[string]string{
+					"juju-model-uuid":      coretesting.ModelTag.Id(),
+					"juju-controller-uuid": coretesting.ControllerTag.Id()},
+			},
+		}},
 	})
 }
 
@@ -214,33 +245,26 @@ func (s *CAASProvisionerSuite) TestAddresses(c *gc.C) {
 
 func (s *CAASProvisionerSuite) TestIssueOperatorCertificate(c *gc.C) {
 	res, err := s.api.IssueOperatorCertificate(params.Entities{
-		Entities: []params.Entity{{Tag: "appname"}},
+		Entities: []params.Entity{{Tag: "application-appname"}},
 	})
 	c.Assert(err, jc.ErrorIsNil)
 	s.st.CheckCallNames(c, "StateServingInfo")
 	c.Assert(res.Results, gc.HasLen, 1)
 	certInfo := res.Results[0]
 	c.Assert(certInfo.Error, gc.IsNil)
-	certBlock, rem := pem.Decode([]byte(certInfo.Cert))
-	c.Assert(rem, gc.HasLen, 0)
-	keyBlock, rem := pem.Decode([]byte(certInfo.PrivateKey))
-	c.Assert(rem, gc.HasLen, 0)
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
+
+	certs, signers, err := pki.UnmarshalPemData(append([]byte(certInfo.Cert),
+		[]byte(certInfo.PrivateKey)...))
 	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(len(signers), gc.Equals, 1)
+	c.Assert(len(certs), gc.Equals, 1)
+
 	roots := x509.NewCertPool()
 	ok := roots.AppendCertsFromPEM([]byte(certInfo.CACert))
 	c.Assert(ok, jc.IsTrue)
-	_, err = cert.Verify(x509.VerifyOptions{
+	_, err = certs[0].Verify(x509.VerifyOptions{
 		DNSName: "appname",
 		Roots:   roots,
 	})
-	c.Assert(err, jc.ErrorIsNil)
-	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	c.Assert(err, jc.ErrorIsNil)
-	toSign := []byte("hello juju")
-	hash := sha256.Sum256(toSign)
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
-	c.Assert(err, jc.ErrorIsNil)
-	err = cert.CheckSignature(x509.SHA256WithRSA, toSign, sig)
 	c.Assert(err, jc.ErrorIsNil)
 }

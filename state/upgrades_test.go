@@ -4177,27 +4177,37 @@ func (s *upgradesSuite) TestRemoveControllerConfigMaxLogAgeAndSize(c *gc.C) {
 
 func (s *upgradesSuite) TestIncrementTaskSequence(c *gc.C) {
 	st := s.pool.SystemState()
+	st1 := s.newState(c)
+	st2 := s.newState(c)
 	sequenceColl, closer := st.db().GetRawCollection(sequenceC)
 	defer closer()
 
 	// No tasks sequence requests, so no update.
 	err := IncrementTasksSequence(s.pool)
 	c.Assert(err, jc.ErrorIsNil)
-	n, err := sequenceColl.FindId(st.ModelUUID() + ":tasks").Count()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(n, gc.Equals, 0)
+	for _, s := range []*State{st, st1, st2} {
+		n, err := sequenceColl.FindId(s.ModelUUID() + ":tasks").Count()
+		c.Assert(err, jc.ErrorIsNil)
+		c.Assert(n, gc.Equals, 0)
+	}
 
-	_, err = sequence(st, "tasks")
+	_, err = sequence(st1, "tasks")
 	c.Assert(err, jc.ErrorIsNil)
 	err = IncrementTasksSequence(s.pool)
 	c.Assert(err, jc.ErrorIsNil)
 
-	var data bson.M
-	err = sequenceColl.FindId(st.ModelUUID() + ":tasks").One(&data)
-	c.Assert(err, jc.ErrorIsNil)
-	counter, ok := data["counter"].(int)
-	c.Assert(ok, jc.IsTrue)
-	c.Assert(counter, gc.Equals, 2)
+	for i, s := range []*State{st, st1, st2} {
+		var data bson.M
+		err = sequenceColl.FindId(s.ModelUUID() + ":tasks").One(&data)
+		if i != 1 {
+			c.Assert(err, gc.Equals, mgo.ErrNotFound)
+			continue
+		}
+		c.Assert(err, jc.ErrorIsNil)
+		counter, ok := data["counter"].(int)
+		c.Assert(ok, jc.IsTrue)
+		c.Assert(counter, gc.Equals, 2)
+	}
 }
 
 func (s *upgradesSuite) makeMachine(c *gc.C, uuid, id string, life Life) {
@@ -4224,6 +4234,111 @@ func (s *upgradesSuite) makeSpace(c *gc.C, uuid, name, id string) {
 		"name":       name,
 	})
 	c.Assert(err, jc.ErrorIsNil)
+}
+
+func (s *upgradesSuite) TestAddMachineIDToSubordinates(c *gc.C) {
+	col, closer := s.state.db().GetRawCollection(unitsC)
+	defer closer()
+
+	uuid1 := utils.MustNewUUID().String()
+	uuid2 := utils.MustNewUUID().String()
+	uuid3 := utils.MustNewUUID().String()
+
+	err := col.Insert(bson.M{
+		"_id":        uuid1 + ":principal/1",
+		"model-uuid": uuid1,
+		"machineid":  "1",
+	}, bson.M{
+		"_id":        uuid1 + ":telegraf/1",
+		"model-uuid": uuid1,
+		"principal":  "principal/1",
+	}, bson.M{
+		"_id":        uuid2 + ":another/0",
+		"model-uuid": uuid2,
+		"machineid":  "42",
+	}, bson.M{
+		"_id":        uuid2 + ":telegraf/0",
+		"model-uuid": uuid2,
+		"principal":  "another/0",
+	}, bson.M{
+		"_id":        uuid2 + ":livepatch/0",
+		"model-uuid": uuid2,
+		"principal":  "another/0",
+	}, bson.M{
+		// uuid3 is our CAAS model that doesn't have machine IDs for the princpals.
+		"_id":        uuid3 + ":base/0",
+		"model-uuid": uuid3,
+	}, bson.M{
+		"_id":        uuid3 + ":subordinate/0",
+		"model-uuid": uuid3,
+		"principal":  "base/0",
+	})
+	c.Assert(err, jc.ErrorIsNil)
+
+	expected := bsonMById{
+		{
+			"_id":        uuid1 + ":principal/1",
+			"model-uuid": uuid1,
+			"machineid":  "1",
+		}, {
+			"_id":        uuid1 + ":telegraf/1",
+			"model-uuid": uuid1,
+			"principal":  "principal/1",
+			"machineid":  "1",
+		}, {
+			"_id":        uuid2 + ":another/0",
+			"model-uuid": uuid2,
+			"machineid":  "42",
+		}, {
+			"_id":        uuid2 + ":telegraf/0",
+			"model-uuid": uuid2,
+			"principal":  "another/0",
+			"machineid":  "42",
+		}, {
+			"_id":        uuid2 + ":livepatch/0",
+			"model-uuid": uuid2,
+			"principal":  "another/0",
+			"machineid":  "42",
+		}, {
+			// uuid3 is our CAAS model that doesn't have machine IDs for the princpals.
+			"_id":        uuid3 + ":base/0",
+			"model-uuid": uuid3,
+		}, {
+			"_id":        uuid3 + ":subordinate/0",
+			"model-uuid": uuid3,
+			"principal":  "base/0",
+		},
+	}
+
+	sort.Sort(expected)
+	s.assertUpgradedData(c, AddMachineIDToSubordinates, upgradedData(col, expected))
+}
+
+func (s *upgradesSuite) TestDropPresenceDatabase(c *gc.C) {
+	presenceDBName := "presence"
+	db := s.state.session.DB(presenceDBName)
+	col := db.C("presence")
+
+	err := col.Insert(bson.M{"test": "foo"})
+	c.Assert(err, jc.ErrorIsNil)
+
+	presenceDBExists := func() bool {
+		names, err := s.state.session.DatabaseNames()
+		c.Assert(err, jc.ErrorIsNil)
+		dbNames := set.NewStrings(names...)
+		return dbNames.Contains(presenceDBName)
+	}
+
+	c.Assert(presenceDBExists(), jc.IsTrue)
+
+	err = DropPresenceDatabase(s.pool)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(presenceDBExists(), jc.IsFalse)
+
+	// Running again is no error.
+	err = DropPresenceDatabase(s.pool)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(presenceDBExists(), jc.IsFalse)
 }
 
 type docById []bson.M

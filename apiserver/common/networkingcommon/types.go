@@ -27,8 +27,8 @@ import (
 // TODO(dimitern): Once the state backing is implemented, remove this
 // and just use *state.Subnet.
 type BackingSubnet interface {
-	CIDR() string
 	ID() string
+	CIDR() string
 	VLANTag() int
 	ProviderId() corenetwork.Id
 	ProviderNetworkId() corenetwork.Id
@@ -130,27 +130,33 @@ type NetworkBacking interface {
 	// ModelTag returns the tag of the model this state is associated to.
 	ModelTag() names.ModelTag
 
-	// ReloadSpaces loads spaces from backing environ
-	ReloadSpaces(environ environs.BootstrapEnviron) error
+	// SaveProviderSubnets loads subnets into state.
+	// Currently it does not delete removed subnets.
+	SaveProviderSubnets(subnets []corenetwork.SubnetInfo, spaceID string) error
+
+	// SaveProviderSpaces loads providerSpaces into state.
+	// Currently it does not delete removed spaces.
+	SaveProviderSpaces(providerSpaces []corenetwork.SpaceInfo) error
+}
+
+// BackingSubnetToParamsSubnetV2 converts a network backing subnet to the new
+// version of the subnet API parameter.
+func BackingSubnetToParamsSubnetV2(subnet BackingSubnet) params.SubnetV2 {
+	return params.SubnetV2{
+		ID:     subnet.ID(),
+		Subnet: BackingSubnetToParamsSubnet(subnet),
+	}
 }
 
 func BackingSubnetToParamsSubnet(subnet BackingSubnet) params.Subnet {
-	cidr := subnet.CIDR()
-	vlantag := subnet.VLANTag()
-	providerid := subnet.ProviderId()
-	providerNetworkid := subnet.ProviderNetworkId()
-	zones := subnet.AvailabilityZones()
-	status := subnet.Status()
-	spaceTag := names.NewSpaceTag(subnet.SpaceName()).String()
-
 	return params.Subnet{
-		CIDR:              cidr,
-		VLANTag:           vlantag,
-		ProviderId:        string(providerid),
-		ProviderNetworkId: string(providerNetworkid),
-		Zones:             zones,
-		Status:            status,
-		SpaceTag:          spaceTag,
+		CIDR:              subnet.CIDR(),
+		VLANTag:           subnet.VLANTag(),
+		ProviderId:        subnet.ProviderId().String(),
+		ProviderNetworkId: subnet.ProviderNetworkId().String(),
+		Zones:             subnet.AvailabilityZones(),
+		Status:            subnet.Status(),
+		SpaceTag:          names.NewSpaceTag(subnet.SpaceName()).String(),
 		Life:              subnet.Life(),
 	}
 }

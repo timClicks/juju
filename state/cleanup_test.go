@@ -522,14 +522,9 @@ func (s *CleanupSuite) TestCleanupForceDestroyedMachineWithContainer(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 
 	// Create active units (in relation scope, with subordinates).
-	prr := newProReqRelation(c, &s.ConnSuite, charm.ScopeContainer)
+	prr := newProReqRelation(c, &s.ConnSuite, charm.ScopeContainer, machine, container)
 	prr.allEnterScope(c)
 
-	// Assign the various units to machines.
-	err = prr.pu0.AssignToMachine(machine)
-	c.Assert(err, jc.ErrorIsNil)
-	err = prr.pu1.AssignToMachine(container)
-	c.Assert(err, jc.ErrorIsNil)
 	preventProReqUnitsDestroyRemove(c, prr)
 	s.assertDoesNotNeedCleanup(c)
 
@@ -880,7 +875,9 @@ func (s *CleanupSuite) assertCleanupCAASEntityWithStorage(c *gc.C, deleteOp func
 	defer st.Close()
 	sb, err := state.NewStorageBackend(st)
 	c.Assert(err, jc.ErrorIsNil)
-	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(st)
+	model, err := st.Model()
+	c.Assert(err, jc.ErrorIsNil)
+	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(model)
 	c.Assert(err, jc.ErrorIsNil)
 	registry := stateenvirons.NewStorageProviderRegistry(broker)
 	s.policy = testing.MockPolicy{

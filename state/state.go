@@ -32,7 +32,6 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 
-	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/core/application"
 	"github.com/juju/juju/core/constraints"
 	coreglobalclock "github.com/juju/juju/core/globalclock"
@@ -47,7 +46,6 @@ import (
 	"github.com/juju/juju/state/cloudimagemetadata"
 	"github.com/juju/juju/state/globalclock"
 	statelease "github.com/juju/juju/state/lease"
-	"github.com/juju/juju/state/presence"
 	raftleasestore "github.com/juju/juju/state/raftlease"
 	"github.com/juju/juju/state/watcher"
 	"github.com/juju/juju/storage"
@@ -59,10 +57,6 @@ var logger = loggo.GetLogger("juju.state")
 const (
 	// jujuDB is the name of the main juju database.
 	jujuDB = "juju"
-
-	// presenceDB is the name of the database used to hold presence pinger data.
-	presenceDB = "presence"
-	presenceC  = "presence"
 
 	// blobstoreDB is the name of the blobstore GridFS database.
 	blobstoreDB = "blobstore"
@@ -106,26 +100,6 @@ type State struct {
 
 	// TODO(anastasiamac 2015-07-16) As state gets broken up, remove this.
 	CloudImageMetadataStorage cloudimagemetadata.Storage
-}
-
-// StateServingInfo holds information needed by a controller.
-// This type is a copy of the type of the same name from the api/params package.
-// It is replicated here to avoid the state package depending on api/params.
-//
-// NOTE(fwereade): the api/params type exists *purely* for representing
-// this data over the wire, and has a legitimate reason to exist. This
-// type does not: it's non-implementation-specific and should be defined
-// under core/ somewhere, so it can be used both here and in the agent
-// without dragging unnecessary/irrelevant packages into scope.
-type StateServingInfo struct {
-	APIPort      int
-	StatePort    int
-	Cert         string
-	PrivateKey   string
-	CAPrivateKey string
-	// this will be passed as the KeyFile argument to MongoDB
-	SharedSecret   string
-	SystemIdentity string
 }
 
 func (st *State) newStateNoWorkers(modelUUID string) (*State, error) {
@@ -321,13 +295,9 @@ func (st *State) removeAllModelDocs(modelAssertion bson.D) error {
 			}
 		}
 	}
-	// Logs and presence are in separate databases so don't get caught by that
-	// loop.
-	removeModelLogs(st.MongoSession(), modelUUID)
-	err := presence.RemovePresenceForModel(st.getPresenceCollection(), st.modelTag)
-	if err != nil {
-		return errors.Trace(err)
-	}
+
+	// Logs are in a separate database so don't get caught by that loop.
+	_ = removeModelLogs(st.MongoSession(), modelUUID)
 
 	// Remove all user permissions for the model.
 	permPattern := bson.M{
@@ -364,7 +334,7 @@ func (st *State) removeAllModelDocs(modelAssertion bson.D) error {
 	}}
 
 	// Decrement the model count for the cloud to which this model belongs.
-	decCloudRefOp, err := decCloudModelRefOp(st, model.Cloud())
+	decCloudRefOp, err := decCloudModelRefOp(st, model.CloudName())
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -605,18 +575,6 @@ func (st *State) EnsureModelRemoved() error {
 	return nil
 }
 
-// getPresenceCollection returns the raw mongodb presence collection,
-// which is needed to interact with the state/presence package.
-func (st *State) getPresenceCollection() *mgo.Collection {
-	return st.session.DB(presenceDB).C(presenceC)
-}
-
-// getPingBatcher returns the implementation of how we serialize Ping requests
-// for agents to the database.
-func (st *State) getPingBatcher() *presence.PingBatcher {
-	return st.workers.pingBatcherWorker()
-}
-
 // getTxnLogCollection returns the raw mongodb txns collection, which is
 // needed to interact with the state/watcher package.
 func (st *State) getTxnLogCollection() *mgo.Collection {
@@ -756,7 +714,7 @@ func (st *State) checkCanUpgradeIAAS(currentVersion, newVersion string) error {
 	return nil
 }
 
-var errUpgradeInProgress = errors.New(params.CodeUpgradeInProgress)
+var errUpgradeInProgress = errors.New("upgrade in progress")
 
 // IsUpgradeInProgressError returns true if the error is caused by an
 // in-progress upgrade.
@@ -1230,7 +1188,7 @@ func (st *State) AddApplication(args AddApplicationArgs) (_ *Application, err er
 		return nil, errors.Errorf("AttachStorage is non-empty but NumUnits is %d, must be 1", args.NumUnits)
 	}
 
-	if err := validateCharmVersion(args.Charm); err != nil {
+	if err := jujuversion.CheckJujuMinVersion(args.Charm.Meta().MinJujuVersion, jujuversion.Current); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -2455,8 +2413,6 @@ func (st *State) StartSync() {
 	if syncable, ok := st.workers.txnLogWatcher().(hasStartSync); ok {
 		syncable.StartSync()
 	}
-	st.workers.pingBatcherWorker().Sync()
-	st.workers.presenceWatcher().Sync()
 }
 
 // SetAdminMongoPassword sets the administrative password

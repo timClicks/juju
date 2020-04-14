@@ -4,6 +4,7 @@
 package caasoperatorprovisioner
 
 import (
+	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/controller"
@@ -16,7 +17,7 @@ import (
 // required by the CAAS operator provisioner facade.
 type CAASOperatorProvisionerState interface {
 	ControllerConfig() (controller.Config, error)
-	StateServingInfo() (state.StateServingInfo, error)
+	StateServingInfo() (controller.StateServingInfo, error)
 	WatchApplications() state.StringsWatcher
 	FindEntity(tag names.Tag) (state.Entity, error)
 	Addresses() ([]string, error)
@@ -24,11 +25,20 @@ type CAASOperatorProvisionerState interface {
 	Model() (Model, error)
 	APIHostPortsForAgents() ([]network.SpaceHostPorts, error)
 	WatchAPIHostPortsForAgents() state.NotifyWatcher
+	Application(string) (Application, error)
 }
 
 type Model interface {
 	UUID() string
 	ModelConfig() (*config.Config, error)
+}
+
+type Application interface {
+	Charm() (ch Charm, force bool, err error)
+}
+
+type Charm interface {
+	Meta() *charm.Meta
 }
 
 type stateShim struct {
@@ -41,4 +51,20 @@ func (s stateShim) Model() (Model, error) {
 		return nil, err
 	}
 	return model.CAASModel()
+}
+
+func (s stateShim) Application(name string) (Application, error) {
+	app, err := s.State.Application(name)
+	if err != nil {
+		return nil, err
+	}
+	return &applicationShim{app}, nil
+}
+
+type applicationShim struct {
+	*state.Application
+}
+
+func (a *applicationShim) Charm() (Charm, bool, error) {
+	return a.Application.Charm()
 }

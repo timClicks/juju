@@ -18,7 +18,6 @@ import (
 	gc "gopkg.in/check.v1"
 	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/environschema.v1"
-	"gopkg.in/juju/worker.v1"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 
@@ -260,7 +259,78 @@ deployment:
 		ForceUnits: true,
 	}
 	err := app.SetCharm(cfg)
-	c.Assert(err, gc.ErrorMatches, `cannot upgrade application "gitlab" to charm "local:kubernetes/kubernetes-gitlab-2": cannot change a charm's deployment type`)
+	c.Assert(err, gc.ErrorMatches, `cannot upgrade application "gitlab" to charm "local:kubernetes/kubernetes-gitlab-2": cannot change a charm's deployment info`)
+}
+
+func (s *ApplicationSuite) TestCAASSetCharmNewDeploymentTypeFails(c *gc.C) {
+	st := s.Factory.MakeModel(c, &factory.ModelParams{
+		Name: "caas-model",
+		Type: state.ModelTypeCAAS,
+	})
+	defer st.Close()
+	f := factory.NewFactory(st, s.StatePool)
+	ch := f.MakeCharm(c, &factory.CharmParams{Name: "elastic-operator", Series: "kubernetes"})
+	app := f.MakeApplication(c, &factory.ApplicationParams{Name: "elastic-operator", Charm: ch})
+
+	// Create a charm with new deployment info in metadata.
+	metaYaml := `
+name: elastic-operator
+summary: test
+description: test
+provides:
+  website:
+    interface: http
+requires:
+  db:
+    interface: mysql
+series:
+  - kubernetes
+deployment:
+  type: stateful
+  service: loadbalancer
+`[1:]
+	newCh := state.AddCustomCharm(c, st, "elastic-operator", "metadata.yaml", metaYaml, "kubernetes", 2)
+	cfg := state.SetCharmConfig{
+		Charm:      newCh,
+		ForceUnits: true,
+	}
+	err := app.SetCharm(cfg)
+	c.Assert(err, gc.ErrorMatches, `cannot upgrade application "elastic-operator" to charm "local:kubernetes/kubernetes-elastic-operator-2": cannot change a charm's deployment type`)
+}
+
+func (s *ApplicationSuite) TestCAASSetCharmNewDeploymentModeFails(c *gc.C) {
+	st := s.Factory.MakeModel(c, &factory.ModelParams{
+		Name: "caas-model",
+		Type: state.ModelTypeCAAS,
+	})
+	defer st.Close()
+	f := factory.NewFactory(st, s.StatePool)
+	ch := f.MakeCharm(c, &factory.CharmParams{Name: "elastic-operator", Series: "kubernetes"})
+	app := f.MakeApplication(c, &factory.ApplicationParams{Name: "elastic-operator", Charm: ch})
+
+	// Create a charm with new deployment info in metadata.
+	metaYaml := `
+name: elastic-operator
+summary: test
+description: test
+provides:
+  website:
+    interface: http
+requires:
+  db:
+    interface: mysql
+series:
+  - kubernetes
+deployment:
+  mode: workload
+`[1:]
+	newCh := state.AddCustomCharm(c, st, "elastic-operator", "metadata.yaml", metaYaml, "kubernetes", 2)
+	cfg := state.SetCharmConfig{
+		Charm:      newCh,
+		ForceUnits: true,
+	}
+	err := app.SetCharm(cfg)
+	c.Assert(err, gc.ErrorMatches, `cannot upgrade application "elastic-operator" to charm "local:kubernetes/kubernetes-elastic-operator-2": cannot change a charm's deployment mode`)
 }
 
 func (s *ApplicationSuite) TestSetCharmWithNewBindings(c *gc.C) {
@@ -4282,52 +4352,6 @@ func (s *CAASApplicationSuite) TestRewriteStatusHistory(c *gc.C) {
 	c.Assert(history[1].Message, gc.Equals, "operator message")
 	c.Assert(history[2].Status, gc.Equals, status.Waiting)
 	c.Assert(history[2].Message, gc.Equals, "waiting for container")
-}
-
-func (s *ApplicationSuite) TestApplicationSetAgentPresence(c *gc.C) {
-	alive, err := s.mysql.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
-
-	pinger, err := s.mysql.SetAgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(pinger, gc.NotNil)
-	defer func() {
-		c.Assert(worker.Stop(pinger), jc.ErrorIsNil)
-	}()
-	s.State.StartSync()
-	alive, err = s.mysql.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsTrue)
-}
-
-func (s *ApplicationSuite) TestApplicationWaitAgentPresence(c *gc.C) {
-	alive, err := s.mysql.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
-
-	err = s.mysql.WaitAgentPresence(coretesting.ShortWait)
-	c.Assert(err, gc.ErrorMatches, `waiting for agent of application "mysql": still not alive after timeout`)
-
-	pinger, err := s.mysql.SetAgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-
-	s.State.StartSync()
-	err = s.mysql.WaitAgentPresence(coretesting.LongWait)
-	c.Assert(err, jc.ErrorIsNil)
-
-	alive, err = s.mysql.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsTrue)
-
-	err = pinger.KillForTesting()
-	c.Assert(err, jc.ErrorIsNil)
-
-	s.State.StartSync()
-
-	alive, err = s.mysql.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
 }
 
 func (s *ApplicationSuite) TestSetOperatorStatusNonCAAS(c *gc.C) {

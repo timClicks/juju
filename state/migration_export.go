@@ -125,7 +125,7 @@ func (st *State) exportImpl(cfg ExportConfig) (description.Model, error) {
 
 	args := description.ModelArgs{
 		Type:               string(dbModel.Type()),
-		Cloud:              dbModel.Cloud(),
+		Cloud:              dbModel.CloudName(),
 		CloudRegion:        dbModel.CloudRegion(),
 		Owner:              dbModel.Owner(),
 		Config:             modelConfig.Settings,
@@ -134,7 +134,7 @@ func (st *State) exportImpl(cfg ExportConfig) (description.Model, error) {
 		Blocks:             blocks,
 	}
 	export.model = description.NewModel(args)
-	if credsTag, credsSet := dbModel.CloudCredential(); credsSet && !cfg.SkipCredentials {
+	if credsTag, credsSet := dbModel.CloudCredentialTag(); credsSet && !cfg.SkipCredentials {
 		creds, err := st.CloudCredential(credsTag)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -203,6 +203,9 @@ func (st *State) exportImpl(cfg ExportConfig) (description.Model, error) {
 		return nil, errors.Trace(err)
 	}
 	if err := export.actions(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	if err := export.operations(); err != nil {
 		return nil, errors.Trace(err)
 	}
 	if err := export.cloudimagemetadata(); err != nil {
@@ -918,10 +921,27 @@ func (e *exporter) addApplication(ctx addApplicationContext) error {
 		if cloudContainer, found := ctx.cloudContainers[unit.globalKey()]; found {
 			args.CloudContainer = e.cloudContainer(cloudContainer)
 		}
-		if args.State, err = unit.State(); err != nil {
+
+		// Export charm and agent state stored to the controller.
+		unitState, err := unit.State()
+		if err != nil {
 			return errors.Trace(err)
 		}
-
+		if charmState, found := unitState.CharmState(); found {
+			args.CharmState = charmState
+		}
+		if relationState, found := unitState.RelationState(); found {
+			args.RelationState = relationState
+		}
+		if uniterState, found := unitState.UniterState(); found {
+			args.UniterState = uniterState
+		}
+		if storageState, found := unitState.StorageState(); found {
+			args.StorageState = storageState
+		}
+		if meterStatusState, found := unitState.MeterStatusState(); found {
+			args.MeterStatusState = meterStatusState
+		}
 		exUnit := exApplication.AddUnit(args)
 
 		e.setUnitResources(exUnit, ctx.resources.UnitResources)
@@ -1564,26 +1584,57 @@ func (e *exporter) actions() error {
 		return errors.Trace(err)
 	}
 	e.logger.Debugf("read %d actions", len(actions))
-	for _, action := range actions {
-		results, message := action.Results()
+	for _, a := range actions {
+		results, message := a.Results()
 		arg := description.ActionArgs{
-			Receiver:   action.Receiver(),
-			Name:       action.Name(),
-			Parameters: action.Parameters(),
-			Enqueued:   action.Enqueued(),
-			Started:    action.Started(),
-			Completed:  action.Completed(),
-			Status:     string(action.Status()),
+			Receiver:   a.Receiver(),
+			Name:       a.Name(),
+			Operation:  a.(*action).doc.Operation,
+			Parameters: a.Parameters(),
+			Enqueued:   a.Enqueued(),
+			Started:    a.Started(),
+			Completed:  a.Completed(),
+			Status:     string(a.Status()),
 			Results:    results,
 			Message:    message,
-			Id:         action.Id(),
+			Id:         a.Id(),
 		}
-		messages := action.Messages()
+		messages := a.Messages()
 		arg.Messages = make([]description.ActionMessage, len(messages))
 		for i, m := range messages {
 			arg.Messages[i] = m
 		}
 		e.model.AddAction(arg)
+	}
+	return nil
+}
+
+func (e *exporter) operations() error {
+	if e.cfg.SkipActions {
+		return nil
+	}
+
+	m, err := e.st.Model()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	operations, err := m.AllOperations()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	e.logger.Debugf("read %d operations", len(operations))
+	for _, op := range operations {
+		arg := description.OperationArgs{
+			Summary:           op.Summary(),
+			Enqueued:          op.Enqueued(),
+			Started:           op.Started(),
+			Completed:         op.Completed(),
+			Status:            string(op.Status()),
+			CompleteTaskCount: op.(*operation).doc.CompleteTaskCount,
+			Id:                op.Id(),
+		}
+		e.model.AddOperation(arg)
 	}
 	return nil
 }
@@ -1616,14 +1667,10 @@ func (e *exporter) readAllUnits() (map[string][]*Unit, error) {
 		return nil, errors.Annotate(err, "cannot get all units")
 	}
 	e.logger.Debugf("found %d unit docs", len(docs))
-	model, err := e.st.Model()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	result := make(map[string][]*Unit)
 	for _, doc := range docs {
 		units := result[doc.Application]
-		result[doc.Application] = append(units, newUnit(e.st, model.Type(), &doc))
+		result[doc.Application] = append(units, newUnit(e.st, e.dbModel.Type(), &doc))
 	}
 	return result, nil
 }

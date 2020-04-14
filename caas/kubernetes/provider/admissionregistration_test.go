@@ -101,7 +101,7 @@ func (s *K8sBrokerSuite) assertMutatingWebhookConfigurations(c *gc.C, cfgs map[s
 		s.mockStatefulSets.EXPECT().Get("app-name", metav1.GetOptions{}).
 			Return(statefulSetArg, nil),
 		s.mockStatefulSets.EXPECT().Create(statefulSetArg).
-			Return(nil, nil),
+			Return(nil, s.k8sAlreadyExistsError()),
 		s.mockStatefulSets.EXPECT().Get("app-name", metav1.GetOptions{}).
 			Return(statefulSetArg, nil),
 		s.mockStatefulSets.EXPECT().Update(statefulSetArg).
@@ -241,7 +241,7 @@ func (s *K8sBrokerSuite) TestEnsureMutatingWebhookConfigurationsUpdate(c *gc.C) 
 		c, cfgs,
 		s.mockMutatingWebhookConfiguration.EXPECT().Create(cfg1).Return(cfg1, s.k8sAlreadyExistsError()),
 		s.mockMutatingWebhookConfiguration.EXPECT().
-			List(metav1.ListOptions{LabelSelector: "juju-app==app-name,juju-model==test"}).
+			List(metav1.ListOptions{LabelSelector: "juju-app=app-name,juju-model=test"}).
 			Return(&admissionregistration.MutatingWebhookConfigurationList{Items: []admissionregistration.MutatingWebhookConfiguration{*cfg1}}, nil),
 		s.mockMutatingWebhookConfiguration.EXPECT().
 			Get("test-example-mutatingwebhookconfiguration", metav1.GetOptions{}).
@@ -324,10 +324,6 @@ func (s *K8sBrokerSuite) assertValidatingWebhookConfigurations(c *gc.C, cfgs map
 		s.mockStatefulSets.EXPECT().Get("app-name", metav1.GetOptions{}).
 			Return(statefulSetArg, nil),
 		s.mockStatefulSets.EXPECT().Create(statefulSetArg).
-			Return(nil, nil),
-		s.mockStatefulSets.EXPECT().Get("app-name", metav1.GetOptions{}).
-			Return(statefulSetArg, nil),
-		s.mockStatefulSets.EXPECT().Update(statefulSetArg).
 			Return(nil, nil),
 	}...)
 	gomock.InOrder(assertCalls...)
@@ -464,7 +460,7 @@ func (s *K8sBrokerSuite) TestEnsureValidatingWebhookConfigurationsUpdate(c *gc.C
 		c, cfgs,
 		s.mockValidatingWebhookConfiguration.EXPECT().Create(cfg1).Return(cfg1, s.k8sAlreadyExistsError()),
 		s.mockValidatingWebhookConfiguration.EXPECT().
-			List(metav1.ListOptions{LabelSelector: "juju-app==app-name,juju-model==test"}).
+			List(metav1.ListOptions{LabelSelector: "juju-app=app-name,juju-model=test"}).
 			Return(&admissionregistration.ValidatingWebhookConfigurationList{Items: []admissionregistration.ValidatingWebhookConfiguration{*cfg1}}, nil),
 		s.mockValidatingWebhookConfiguration.EXPECT().
 			Get("test-example-mutatingwebhookconfiguration", metav1.GetOptions{}).

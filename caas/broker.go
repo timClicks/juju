@@ -93,6 +93,14 @@ const (
 	DeploymentDaemon    DeploymentType = "daemon"
 )
 
+// DeploymentMode defines a deployment mode.
+type DeploymentMode string
+
+const (
+	ModeOperator DeploymentMode = "operator"
+	ModeWorkload DeploymentMode = "workload"
+)
+
 // ServiceType defines a service type.
 type ServiceType string
 
@@ -160,6 +168,9 @@ type Broker interface {
 	// a charm for the specified application.
 	EnsureOperator(appName, agentPath string, config *OperatorConfig) error
 
+	// ApplyRawK8sSpec deploys raw k8s spec.
+	ApplyRawK8sSpec(string) error
+
 	// OperatorExists indicates if the operator for the specified
 	// application exists, and whether the operator is terminating.
 	OperatorExists(appName string) (OperatorState, error)
@@ -169,15 +180,15 @@ type Broker interface {
 
 	// WatchUnits returns a watcher which notifies when there
 	// are changes to units of the specified application.
-	WatchUnits(appName string) (watcher.NotifyWatcher, error)
+	WatchUnits(appName string, mode DeploymentMode) (watcher.NotifyWatcher, error)
 
 	// Units returns all units and any associated filesystems
 	// of the specified application. Filesystems are mounted
 	// via volumes bound to the unit.
-	Units(appName string) ([]Unit, error)
+	Units(appName string, mode DeploymentMode) ([]Unit, error)
 
 	// AnnotateUnit annotates the specified pod (name or uid) with a unit tag.
-	AnnotateUnit(appName, podName string, unit names.UnitTag) error
+	AnnotateUnit(appName string, mode DeploymentMode, podName string, unit names.UnitTag) error
 
 	// WatchContainerStart returns a watcher which is notified when the specified container
 	// for each unit in the application is starting/restarting. Each string represents
@@ -191,7 +202,7 @@ type Broker interface {
 
 	// WatchService returns a watcher which notifies when there
 	// are changes to the deployment of the specified application.
-	WatchService(appName string) (watcher.NotifyWatcher, error)
+	WatchService(appName string, mode DeploymentMode) (watcher.NotifyWatcher, error)
 
 	// Operator returns an Operator with current status and life details.
 	Operator(string) (*Operator, error)
@@ -261,7 +272,7 @@ type ServiceGetterSetter interface {
 	UnexposeService(appName string) error
 
 	// GetService returns the service for the specified application.
-	GetService(appName string, includeClusterIP bool) (*Service, error)
+	GetService(appName string, mode DeploymentMode, includeClusterIP bool) (*Service, error)
 }
 
 // NamespaceGetterSetter provides the API to get/set namespace.
@@ -371,9 +382,9 @@ type OperatorConfig struct {
 	// Version is the Juju version of the operator image.
 	Version version.Number
 
-	// CharmStorage defines parameters used to create storage
-	// for operators to use for charm state.
-	CharmStorage CharmStorageParams
+	// CharmStorage defines parameters used to optionally
+	// create storage for operators to use for charm state.
+	CharmStorage *CharmStorageParams
 
 	// AgentConf is the contents of the agent.conf file.
 	AgentConf []byte
@@ -383,4 +394,9 @@ type OperatorConfig struct {
 
 	// ResourceTags is a set of tags to set on the operator pod.
 	ResourceTags map[string]string
+
+	// ConfigMapGeneration is set when updating the operator config
+	// map for consistency in Read after Write and Write after Write.
+	// A value of 0 is ignored.
+	ConfigMapGeneration int64
 }

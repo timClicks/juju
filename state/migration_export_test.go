@@ -10,8 +10,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/juju/juju/core/firewall"
-
 	"github.com/juju/description"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
@@ -28,6 +26,7 @@ import (
 	apitesting "github.com/juju/juju/api/testing"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/crossmodel"
+	"github.com/juju/juju/core/firewall"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/lease"
 	"github.com/juju/juju/core/network"
@@ -91,12 +90,12 @@ func (s *MigrationBaseSuite) primeStatusHistory(c *gc.C, entity statusSetter, st
 	}, 0, "")
 }
 
-func (s *MigrationBaseSuite) makeApplicationWithUnits(c *gc.C, applicationname string, count int) {
+func (s *MigrationBaseSuite) makeApplicationWithUnits(c *gc.C, applicationName string, count int) {
 	units := make([]*state.Unit, count)
 	application := s.Factory.MakeApplication(c, &factory.ApplicationParams{
-		Name: applicationname,
+		Name: applicationName,
 		Charm: s.Factory.MakeCharm(c, &factory.CharmParams{
-			Name: applicationname,
+			Name: applicationName,
 		}),
 	})
 	for i := 0; i < count; i++ {
@@ -112,7 +111,7 @@ func (s *MigrationBaseSuite) makeUnitApplicationLeader(c *gc.C, unitName, applic
 		loggo.GetLogger("migration_export_test"),
 	)
 	target.Claimed(
-		lease.Key{"application-leadership", s.State.ModelUUID(), applicationName},
+		lease.Key{Namespace: "application-leadership", ModelUUID: s.State.ModelUUID(), Lease: applicationName},
 		unitName,
 	)
 }
@@ -759,9 +758,13 @@ func (s *MigrationExportSuite) assertMigrateUnits(c *gc.C, st *state.State) {
 		err = unit.SetWorkloadVersion(version)
 		c.Assert(err, jc.ErrorIsNil)
 	}
-	err = unit.SetState(map[string]string{
-		"payload": "b4dc0ffee",
-	})
+	us := state.NewUnitState()
+	us.SetCharmState(map[string]string{"payload": "b4dc0ffee"})
+	us.SetRelationState(map[int]string{42: "magic"})
+	us.SetUniterState("uniter state")
+	us.SetStorageState("storage state")
+	us.SetMeterStatusState("meter status state")
+	err = unit.SetState(us, state.UnitStateSizeLimits{})
 	c.Assert(err, jc.ErrorIsNil)
 
 	dbModel, err := st.Model()
@@ -811,11 +814,15 @@ func (s *MigrationExportSuite) assertMigrateUnits(c *gc.C, st *state.State) {
 	c.Assert(exported.MeterStatusInfo(), gc.Equals, "some info")
 	c.Assert(exported.WorkloadVersion(), gc.Equals, "steven")
 	c.Assert(exported.Annotations(), jc.DeepEquals, testAnnotations)
-	c.Assert(exported.State(), jc.DeepEquals, map[string]string{"payload": "b4dc0ffee"})
-	constraints := exported.Constraints()
-	c.Assert(constraints, gc.NotNil)
-	c.Assert(constraints.Architecture(), gc.Equals, "amd64")
-	c.Assert(constraints.Memory(), gc.Equals, 8*gig)
+	c.Assert(exported.CharmState(), jc.DeepEquals, map[string]string{"payload": "b4dc0ffee"})
+	c.Assert(exported.RelationState(), jc.DeepEquals, map[int]string{42: "magic"})
+	c.Assert(exported.UniterState(), gc.Equals, "uniter state")
+	c.Assert(exported.StorageState(), gc.Equals, "storage state")
+	c.Assert(exported.MeterStatusState(), gc.Equals, "meter status state")
+	obtainedConstraints := exported.Constraints()
+	c.Assert(obtainedConstraints, gc.NotNil)
+	c.Assert(obtainedConstraints.Architecture(), gc.Equals, "amd64")
+	c.Assert(obtainedConstraints.Memory(), gc.Equals, 8*gig)
 
 	workloadHistory := exported.WorkloadStatusHistory()
 	if dbModel.Type() == state.ModelTypeCAAS {
@@ -838,8 +845,8 @@ func (s *MigrationExportSuite) assertMigrateUnits(c *gc.C, st *state.State) {
 	// There are extra entries at the start that we don't care about.
 	c.Assert(len(versionHistory) >= 4, jc.IsTrue)
 	versions := make([]string, 4)
-	for i, status := range versionHistory[:4] {
-		versions[i] = status.Message()
+	for i, s := range versionHistory[:4] {
+		versions[i] = s.Message()
 	}
 	// The exporter reads history in reverse time order.
 	c.Assert(versions, gc.DeepEquals, []string{"steven", "pearl", "amethyst", "garnet"})
@@ -1525,6 +1532,7 @@ func (s *MigrationExportSuite) TestActions(c *gc.C) {
 	action := actions[0]
 	c.Check(action.Receiver(), gc.Equals, machine.Id())
 	c.Check(action.Name(), gc.Equals, "foo")
+	c.Check(action.Operation(), gc.Equals, operationID)
 	c.Check(action.Status(), gc.Equals, "running")
 	c.Check(action.Message(), gc.Equals, "")
 	logs := action.Logs()
@@ -1552,6 +1560,32 @@ func (s *MigrationExportSuite) TestActionsSkipped(c *gc.C) {
 
 	actions := model.Actions()
 	c.Assert(actions, gc.HasLen, 0)
+	operations := model.Operations()
+	c.Assert(operations, gc.HasLen, 0)
+}
+
+func (s *MigrationExportSuite) TestOperations(c *gc.C) {
+	machine := s.Factory.MakeMachine(c, &factory.MachineParams{
+		Constraints: constraints.MustParse("arch=amd64 mem=8G"),
+	})
+
+	m, err := s.State.Model()
+	c.Assert(err, jc.ErrorIsNil)
+
+	operationID, err := m.EnqueueOperation("a test")
+	c.Assert(err, jc.ErrorIsNil)
+	a, err := m.EnqueueAction(operationID, machine.MachineTag(), "foo", nil)
+	c.Assert(err, jc.ErrorIsNil)
+	a, err = a.Begin()
+	c.Assert(err, jc.ErrorIsNil)
+
+	model, err := s.State.Export()
+	c.Assert(err, jc.ErrorIsNil)
+	operations := model.Operations()
+	c.Assert(operations, gc.HasLen, 1)
+	op := operations[0]
+	c.Check(op.Summary(), gc.Equals, "a test")
+	c.Check(op.Status(), gc.Equals, "running")
 }
 
 type goodToken struct{}

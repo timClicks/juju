@@ -20,6 +20,7 @@ import (
 	"gopkg.in/mgo.v2/txn"
 
 	"github.com/juju/juju/cloud"
+	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/network"
@@ -158,6 +159,9 @@ func (ctrl *Controller) Import(model description.Model) (_ *Model, _ *State, err
 	}
 	if err := restore.actions(); err != nil {
 		return nil, nil, errors.Annotate(err, "actions")
+	}
+	if err := restore.operations(); err != nil {
+		return nil, nil, errors.Annotate(err, "operations")
 	}
 
 	if err := restore.modelUsers(); err != nil {
@@ -736,6 +740,11 @@ func (i *importer) makeAddresses(addrs []description.Address) []address {
 func (i *importer) applications() error {
 	i.logger.Debugf("importing applications")
 
+	ctrlCfg, err := i.st.ControllerConfig()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
 	// Ensure we import principal applications first, so that
 	// subordinate units can refer to the principal ones.
 	var principals, subordinates []description.Application
@@ -748,7 +757,7 @@ func (i *importer) applications() error {
 	}
 
 	for _, s := range append(principals, subordinates...) {
-		if err := i.application(s); err != nil {
+		if err := i.application(s, ctrlCfg); err != nil {
 			i.logger.Errorf("error importing application %s: %s", s.Name(), err)
 			return errors.Annotate(err, s.Name())
 		}
@@ -771,10 +780,6 @@ func (i *importer) loadUnits() error {
 		return errors.Annotate(err, "cannot get all units")
 	}
 
-	model, err := i.st.Model()
-	if err != nil {
-		return errors.Trace(err)
-	}
 	result := make(map[string]map[string]*Unit)
 	for _, doc := range docs {
 		units, found := result[doc.Application]
@@ -782,7 +787,7 @@ func (i *importer) loadUnits() error {
 			units = make(map[string]*Unit)
 			result[doc.Application] = units
 		}
-		units[doc.Name] = newUnit(i.st, model.Type(), &doc)
+		units[doc.Name] = newUnit(i.st, i.dbModel.Type(), &doc)
 	}
 	i.applicationUnits = result
 	return nil
@@ -800,7 +805,7 @@ func (i *importer) makeStatusDoc(statusVal description.Status) statusDoc {
 	}
 }
 
-func (i *importer) application(a description.Application) error {
+func (i *importer) application(a description.Application, ctrlCfg controller.Config) error {
 	// Import this application, then its units.
 	i.logger.Debugf("importing application %s", a.Name())
 
@@ -877,6 +882,7 @@ func (i *importer) application(a description.Application) error {
 			return errors.Trace(err)
 		}
 	}
+	// TODO(caas): Add raw k8s spec to juju/description for model migration!
 
 	if cs := a.CloudService(); cs != nil {
 		app, err := i.st.Application(a.Name())
@@ -899,7 +905,7 @@ func (i *importer) application(a description.Application) error {
 	}
 
 	for _, unit := range a.Units() {
-		if err := i.unit(a, unit); err != nil {
+		if err := i.unit(a, unit, ctrlCfg); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -961,6 +967,11 @@ func (i *importer) parseBindings(bindingsMap map[string]string) (*Bindings, erro
 
 	// 2.6 controllers only populate the default space key if set to the
 	// non-default space whereas 2.7 controllers always set it.
+	// The application implementation in the description package has
+	// `omitempty` for bindings, so we need to create it if nil.
+	if bindingsMap == nil {
+		bindingsMap = make(map[string]string, 1)
+	}
 	if _, exists := bindingsMap[defaultEndpointName]; !exists {
 		bindingsMap[defaultEndpointName] = network.AlphaSpaceName
 	}
@@ -1038,7 +1049,7 @@ func (i *importer) storageConstraints(cons map[string]description.StorageConstra
 	return result
 }
 
-func (i *importer) unit(s description.Application, u description.Unit) error {
+func (i *importer) unit(s description.Application, u description.Unit, ctrlCfg controller.Config) error {
 	i.logger.Debugf("importing unit %s", u.Name())
 
 	// 1. construct a unitDoc
@@ -1148,10 +1159,8 @@ func (i *importer) unit(s description.Application, u description.Unit) error {
 	if err := i.importStatusHistory(unit.globalWorkloadVersionKey(), u.WorkloadVersionHistory()); err != nil {
 		return errors.Trace(err)
 	}
-	if unitState := u.State(); len(unitState) != 0 {
-		if err := unit.SetState(unitState); err != nil {
-			return errors.Trace(err)
-		}
+	if err := i.importUnitState(unit, u, ctrlCfg); err != nil {
+		return errors.Trace(err)
 	}
 	if i.dbModel.Type() == ModelTypeIAAS {
 		if err := i.importUnitPayloads(unit, u.Payloads()); err != nil {
@@ -1159,6 +1168,36 @@ func (i *importer) unit(s description.Application, u description.Unit) error {
 		}
 	}
 	return nil
+}
+
+func (i *importer) importUnitState(unit *Unit, u description.Unit, ctrlCfg controller.Config) error {
+	us := NewUnitState()
+
+	if charmState := u.CharmState(); len(charmState) != 0 {
+		us.SetCharmState(charmState)
+	}
+	if relationState := u.RelationState(); len(relationState) != 0 {
+		us.SetRelationState(relationState)
+	}
+	if uniterState := u.UniterState(); uniterState != "" {
+		us.SetUniterState(uniterState)
+	}
+	if storageState := u.StorageState(); storageState != "" {
+		us.SetStorageState(storageState)
+	}
+	if meterStatusState := u.MeterStatusState(); meterStatusState != "" {
+		us.SetMeterStatusState(meterStatusState)
+	}
+
+	// No state to persist.
+	if !us.Modified() {
+		return nil
+	}
+
+	return unit.SetState(us, UnitStateSizeLimits{
+		MaxCharmStateSize: ctrlCfg.MaxCharmStateSize(),
+		MaxAgentStateSize: ctrlCfg.MaxAgentStateSize(),
+	})
 }
 
 func (i *importer) importUnitPayloads(unit *Unit, payloads []description.Payload) error {
@@ -1225,6 +1264,24 @@ func (i *importer) relationCount(application string) int {
 	return count
 }
 
+func (i *importer) getPrincipalMachineID(principal names.UnitTag) string {
+	// We know this is a valid unit name, so we don't care about the error.
+	appName, _ := names.UnitApplication(principal.Id())
+	for _, app := range i.model.Applications() {
+		if app.Name() == appName {
+			for _, unit := range app.Units() {
+				if unit.Tag() == principal {
+					return unit.Machine().Id()
+				}
+			}
+		}
+	}
+	// We should never get here, but if we do, just return an empty
+	// machine ID.
+	i.logger.Warningf("unable to find principal %q", principal.Id())
+	return ""
+}
+
 func (i *importer) makeUnitDoc(s description.Application, u description.Unit) (*unitDoc, error) {
 	// NOTE: if we want to support units having different charms deployed
 	// than the application recommends and migrate that, then we should serialize
@@ -1243,6 +1300,13 @@ func (i *importer) makeUnitDoc(s description.Application, u description.Unit) (*
 		}
 	}
 
+	machineID := u.Machine().Id()
+	if s.Subordinate() && machineID == "" && i.dbModel.Type() != ModelTypeCAAS {
+		// If we don't have a machine ID and we should, go get the
+		// machine ID from the principal.
+		machineID = i.getPrincipalMachineID(u.Principal())
+	}
+
 	return &unitDoc{
 		Name:                   u.Name(),
 		Application:            s.Name(),
@@ -1251,7 +1315,7 @@ func (i *importer) makeUnitDoc(s description.Application, u description.Unit) (*
 		Principal:              u.Principal().Id(),
 		Subordinates:           subordinates,
 		StorageAttachmentCount: i.unitStorageAttachmentCount(u.Tag()),
-		MachineId:              u.Machine().Id(),
+		MachineId:              machineID,
 		Tools:                  i.makeTools(u.Tools()),
 		Life:                   Alive,
 		PasswordHash:           u.PasswordHash(),
@@ -1849,6 +1913,7 @@ func (i *importer) addAction(action description.Action) error {
 		ModelUUID:  modelUUID,
 		Receiver:   action.Receiver(),
 		Name:       action.Name(),
+		Operation:  action.Operation(),
 		Parameters: action.Parameters(),
 		Enqueued:   action.Enqueued(),
 		Results:    action.Results(),
@@ -1872,6 +1937,43 @@ func (i *importer) addAction(action description.Action) error {
 		C:      actionNotificationsC,
 		Id:     notificationDoc.DocId,
 		Insert: notificationDoc,
+	}}
+
+	if err := i.st.db().RunTransaction(ops); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (i *importer) operations() error {
+	i.logger.Debugf("importing operations")
+	for _, op := range i.model.Operations() {
+		err := i.addOperation(op)
+		if err != nil {
+			i.logger.Errorf("error importing operation %v: %s", op, err)
+			return errors.Trace(err)
+		}
+	}
+	i.logger.Debugf("importing operations succeeded")
+	return nil
+}
+
+func (i *importer) addOperation(op description.Operation) error {
+	modelUUID := i.st.ModelUUID()
+	newDoc := &operationDoc{
+		DocId:             i.st.docID(op.Id()),
+		ModelUUID:         modelUUID,
+		Summary:           op.Summary(),
+		Enqueued:          op.Enqueued(),
+		Started:           op.Started(),
+		Completed:         op.Completed(),
+		Status:            ActionStatus(op.Status()),
+		CompleteTaskCount: op.CompleteTaskCount(),
+	}
+	ops := []txn.Op{{
+		C:      operationsC,
+		Id:     newDoc.DocId,
+		Insert: newDoc,
 	}}
 
 	if err := i.st.db().RunTransaction(ops); err != nil {

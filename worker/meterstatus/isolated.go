@@ -8,11 +8,8 @@ import (
 
 	"github.com/juju/clock"
 	"github.com/juju/errors"
-	"gopkg.in/juju/charm.v6/hooks"
 	"gopkg.in/juju/worker.v1"
 	"gopkg.in/tomb.v2"
-
-	"github.com/juju/juju/worker/common/charmrunner"
 )
 
 const (
@@ -40,7 +37,7 @@ const (
 // IsolatedConfig stores all the dependencies required to create an isolated meter status worker.
 type IsolatedConfig struct {
 	Runner           HookRunner
-	StateFile        *StateFile
+	StateReadWriter  StateReadWriter
 	Clock            clock.Clock
 	AmberGracePeriod time.Duration
 	RedGracePeriod   time.Duration
@@ -52,8 +49,8 @@ func (c IsolatedConfig) Validate() error {
 	if c.Runner == nil {
 		return errors.New("hook runner not provided")
 	}
-	if c.StateFile == nil {
-		return errors.New("state file not provided")
+	if c.StateReadWriter == nil {
+		return errors.New("state read/writer not provided")
 	}
 	if c.Clock == nil {
 		return errors.New("clock not provided")
@@ -93,17 +90,22 @@ func NewIsolatedStatusWorker(cfg IsolatedConfig) (worker.Worker, error) {
 }
 
 func (w *isolatedStatusWorker) loop() error {
-	code, info, disconnected, err := w.config.StateFile.Read()
+	st, err := w.config.StateReadWriter.Read()
 	if err != nil {
-		return errors.Trace(err)
+		if !errors.IsNotFound(err) {
+			return errors.Trace(err)
+		}
+
+		// No state found; create a blank instance.
+		st = new(State)
 	}
 
 	// Disconnected time has not been recorded yet.
-	if disconnected == nil {
-		disconnected = &Disconnected{w.config.Clock.Now().Unix(), WaitingAmber}
+	if st.Disconnected == nil {
+		st.Disconnected = &Disconnected{w.config.Clock.Now().Unix(), WaitingAmber}
 	}
 
-	amberSignal, redSignal := w.config.TriggerFactory(disconnected.State, code, disconnected.When(), w.config.Clock, w.config.AmberGracePeriod, w.config.RedGracePeriod)
+	amberSignal, redSignal := w.config.TriggerFactory(st.Disconnected.State, st.Code, st.Disconnected.When(), w.config.Clock, w.config.AmberGracePeriod, w.config.RedGracePeriod)
 	for {
 		select {
 		case <-w.tomb.Dying():
@@ -114,19 +116,18 @@ func (w *isolatedStatusWorker) loop() error {
 			currentInfo := "unit agent has been disconnected"
 
 			w.applyStatus(currentCode, currentInfo)
-			code, info = currentCode, currentInfo
-			disconnected.State = Done
+			st.Code, st.Info = currentCode, currentInfo
+			st.Disconnected.State = Done
 		case <-amberSignal:
 			logger.Debugf("triggering meter status transition to AMBER due to loss of connection")
 			currentCode := "AMBER"
 			currentInfo := "unit agent has been disconnected"
 
 			w.applyStatus(currentCode, currentInfo)
-			code, info = currentCode, currentInfo
-			disconnected.State = WaitingRed
+			st.Code, st.Info = currentCode, currentInfo
+			st.Disconnected.State = WaitingRed
 		}
-		err := w.config.StateFile.Write(code, info, disconnected)
-		if err != nil {
+		if err := w.config.StateReadWriter.Write(st); err != nil {
 			return errors.Annotate(err, "failed to record meter status worker state")
 		}
 	}
@@ -134,14 +135,7 @@ func (w *isolatedStatusWorker) loop() error {
 
 func (w *isolatedStatusWorker) applyStatus(code, info string) {
 	logger.Tracef("applying meter status change: %q (%q)", code, info)
-	err := w.config.Runner.RunHook(code, info, w.tomb.Dying())
-	cause := errors.Cause(err)
-	switch {
-	case charmrunner.IsMissingHookError(cause):
-		logger.Infof("skipped %q hook (missing)", string(hooks.MeterStatusChanged))
-	case err != nil:
-		logger.Errorf("meter status worker encountered hook error: %v", err)
-	}
+	w.config.Runner.RunHook(code, info, w.tomb.Dying())
 }
 
 // Kill is part of the worker.Worker interface.

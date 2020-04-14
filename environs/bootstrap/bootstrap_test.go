@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/juju/cmd/cmdtesting"
 	"github.com/juju/collections/set"
@@ -22,12 +21,10 @@ import (
 	"github.com/juju/os/series"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils/arch"
-	utilscert "github.com/juju/utils/cert"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
 
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/cert"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cloudconfig/instancecfg"
 	"github.com/juju/juju/cloudconfig/podcfg"
@@ -667,7 +664,7 @@ func (s *bootstrapSuite) TestBootstrapBuildAgent(c *gc.C) {
 			BuildAgentTarball: func(build bool, ver *version.Number, _ string) (*sync.BuiltAgent, error) {
 				c.Logf("BuildAgentTarball version %s", ver)
 				c.Assert(build, jc.IsTrue)
-				c.Assert(ver.String(), gc.Equals, "1.99.0.1")
+				c.Assert(ver.String(), gc.Equals, "2.99.0.1")
 				localVer := *ver
 				return &sync.BuiltAgent{
 					Dir:      c.MkDir(),
@@ -687,7 +684,7 @@ func (s *bootstrapSuite) TestBootstrapBuildAgent(c *gc.C) {
 	cfg := env.instanceConfig.Bootstrap.ControllerModelConfig
 	agentVersion, valid := cfg.AgentVersion()
 	c.Check(valid, jc.IsTrue)
-	c.Check(agentVersion.String(), gc.Equals, "1.99.0")
+	c.Check(agentVersion.String(), gc.Equals, "2.99.0")
 }
 
 func (s *bootstrapSuite) assertBootstrapPackagedToolsAvailable(c *gc.C, clientArch string) {
@@ -1297,19 +1294,6 @@ func (s *bootstrapSuite) TestFinishBootstrapConfig(c *gc.C) {
 	c.Check(icfg.Bootstrap.StateServingInfo.StatePort, gc.Equals, controllerCfg.StatePort())
 	c.Check(icfg.Bootstrap.StateServingInfo.APIPort, gc.Equals, controllerCfg.APIPort())
 	c.Check(icfg.Bootstrap.StateServingInfo.CAPrivateKey, gc.Equals, coretesting.CAKey)
-
-	srvCertPEM := icfg.Bootstrap.StateServingInfo.Cert
-	srvKeyPEM := icfg.Bootstrap.StateServingInfo.PrivateKey
-	_, _, err = utilscert.ParseCertAndKey(srvCertPEM, srvKeyPEM)
-	c.Check(err, jc.ErrorIsNil)
-
-	// TODO(perrito666) 2016-05-02 lp:1558657
-	err = cert.Verify(srvCertPEM, coretesting.CACert, time.Now())
-	c.Assert(err, jc.ErrorIsNil)
-	err = cert.Verify(srvCertPEM, coretesting.CACert, time.Now().AddDate(9, 0, 0))
-	c.Assert(err, jc.ErrorIsNil)
-	err = cert.Verify(srvCertPEM, coretesting.CACert, time.Now().AddDate(10, 0, 1))
-	c.Assert(err, gc.NotNil)
 }
 
 func (s *bootstrapSuite) TestBootstrapMetadataImagesMissing(c *gc.C) {

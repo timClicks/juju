@@ -12,6 +12,7 @@ import (
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/common"
@@ -61,7 +62,11 @@ func NewStateFacade(ctx facade.Context) (*Facade, error) {
 		return nil, errors.Trace(err)
 	}
 
-	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(ctx.State())
+	model, err := ctx.State().Model()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(model)
 	if err != nil {
 		return nil, errors.Annotate(err, "getting caas client")
 	}
@@ -206,7 +211,7 @@ func (f *Facade) ApplicationsScale(args params.Entities) (params.IntResults, err
 		}
 		results.Results[i].Result = scale
 	}
-	logger.Debugf("provisioning info result: %#v", results)
+	logger.Debugf("application scale result: %#v", results)
 	return results, nil
 }
 
@@ -220,6 +225,45 @@ func (f *Facade) applicationScale(tagString string) (int, error) {
 		return 0, errors.Trace(err)
 	}
 	return app.GetScale(), nil
+}
+
+// DeploymentMode returns the deployment mode of the given applications' charms.
+func (f *Facade) DeploymentMode(args params.Entities) (params.StringResults, error) {
+	results := params.StringResults{
+		Results: make([]params.StringResult, len(args.Entities)),
+	}
+	for i, arg := range args.Entities {
+		mode, err := f.applicationDeploymentMode(arg.Tag)
+		if err != nil {
+			results.Results[i].Error = common.ServerError(err)
+			continue
+		}
+		results.Results[i].Result = mode
+	}
+	return results, nil
+}
+
+func (f *Facade) applicationDeploymentMode(tagString string) (string, error) {
+	appTag, err := names.ParseApplicationTag(tagString)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	app, err := f.state.Application(appTag.Id())
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	ch, _, err := app.Charm()
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	var mode charm.DeploymentMode
+	if d := ch.Meta().Deployment; d != nil {
+		mode = d.DeploymentMode
+	}
+	if mode == "" {
+		mode = charm.ModeWorkload
+	}
+	return string(mode), nil
 }
 
 // ProvisioningInfo returns the provisioning info for specified applications in this model.
@@ -251,6 +295,14 @@ func (f *Facade) provisioningInfo(model Model, tagString string) (*params.Kubern
 	podSpec, err := model.PodSpec(appTag)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	rawSpec, err := model.RawK8sSpec(appTag)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if podSpec != "" && rawSpec != "" {
+		// This should never happen.
+		return nil, errors.New("both k8s spec and raw k8s spec were set")
 	}
 
 	// Now get any required storage. We need to provision storage
@@ -309,6 +361,7 @@ func (f *Facade) provisioningInfo(model Model, tagString string) (*params.Kubern
 
 	info := &params.KubernetesProvisioningInfo{
 		PodSpec:           podSpec,
+		RawK8sSpec:        rawSpec,
 		Filesystems:       filesystemParams,
 		Devices:           devices,
 		Constraints:       mergedCons,
@@ -333,21 +386,21 @@ func filesystemParams(
 	modelConfig *config.Config,
 	poolManager poolmanager.PoolManager,
 	registry storage.ProviderRegistry,
-) (params.KubernetesFilesystemParams, error) {
+) (*params.KubernetesFilesystemParams, error) {
 
 	filesystemTags, err := storagecommon.StorageTags(nil, modelConfig.UUID(), controllerUUID, modelConfig)
 	if err != nil {
-		return params.KubernetesFilesystemParams{}, errors.Annotate(err, "computing storage tags")
+		return nil, errors.Annotate(err, "computing storage tags")
 	}
 	filesystemTags[tags.JujuStorageOwner] = app.Name()
 
 	storageClassName, _ := modelConfig.AllAttrs()[provider.WorkloadStorageKey].(string)
 	if cons.Pool == "" && storageClassName == "" {
-		return params.KubernetesFilesystemParams{}, errors.Errorf("storage pool for %q must be specified since there's no model default storage class", storageName)
+		return nil, errors.Errorf("storage pool for %q must be specified since there's no model default storage class", storageName)
 	}
 	fsParams, err := caasoperatorprovisioner.CharmStorageParams(controllerUUID, storageClassName, modelConfig, cons.Pool, poolManager, registry)
 	if err != nil {
-		return params.KubernetesFilesystemParams{}, errors.Maskf(err, "getting filesystem storage parameters")
+		return nil, errors.Maskf(err, "getting filesystem storage parameters")
 	}
 
 	fsParams.Size = cons.Size
@@ -405,7 +458,7 @@ func (f *Facade) applicationFilesystemParams(
 				ReadOnly:   charmStorage.ReadOnly,
 			}
 			fsParams.Attachment = &filesystemAttachmentParams
-			allFilesystemParams = append(allFilesystemParams, fsParams)
+			allFilesystemParams = append(allFilesystemParams, *fsParams)
 		}
 	}
 	return allFilesystemParams, nil
@@ -1023,7 +1076,7 @@ func (a *Facade) updateStateUnits(app Application, unitInfo *updateStateUnitPara
 	// side and so any previously attached filesystems become orphaned and need to
 	// be cleaned up.
 	appName := app.Name()
-	if err := a.cleaupOrphanedFilesystems(processedFilesystemIds); err != nil {
+	if err := a.cleanupOrphanedFilesystems(processedFilesystemIds); err != nil {
 		return errors.Annotatef(err, "deleting orphaned filesystems for %v", appName)
 	}
 
@@ -1036,7 +1089,7 @@ func (a *Facade) updateStateUnits(app Application, unitInfo *updateStateUnitPara
 	return errors.Annotatef(err, "updating filesystem information for %v", appName)
 }
 
-func (a *Facade) cleaupOrphanedFilesystems(processedFilesystemIds set.Strings) error {
+func (a *Facade) cleanupOrphanedFilesystems(processedFilesystemIds set.Strings) error {
 	// TODO(caas) - record unit id on the filesystem so we can query by unit
 	allFilesystems, err := a.storage.AllFilesystems()
 	if err != nil {

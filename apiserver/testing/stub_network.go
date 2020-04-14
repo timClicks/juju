@@ -188,7 +188,7 @@ func (f *FakeSpace) Subnets() (bs []networkingcommon.BackingSubnet, err error) {
 			AvailabilityZones: zones,
 			Status:            status,
 		}
-		outputSubnets = append(outputSubnets, &FakeSubnet{Info: backing, id: strconv.Itoa(i)})
+		outputSubnets = append(outputSubnets, &FakeSubnet{Info: backing, id: f.SpaceId + strconv.Itoa(i)})
 	}
 
 	return outputSubnets, nil
@@ -361,7 +361,7 @@ func (f *FakeSubnet) SpaceID() string {
 }
 
 func (f *FakeSubnet) Life() life.Value {
-	return life.Value(f.Info.Life)
+	return f.Info.Life
 }
 
 // ResetStub resets all recorded calls and errors of the given stub.
@@ -590,8 +590,16 @@ func (sb *StubBacking) AddSpace(name string, providerId network.Id, subnets []st
 	return nil
 }
 
-func (sb *StubBacking) ReloadSpaces(environ environs.BootstrapEnviron) error {
-	sb.MethodCall(sb, "ReloadSpaces", environ)
+func (sb *StubBacking) SaveProviderSubnets(subnets []network.SubnetInfo, spaceID string) error {
+	sb.MethodCall(sb, "SaveProviderSubnets", subnets, spaceID)
+	if err := sb.NextErr(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sb *StubBacking) SaveProviderSpaces(providerSpaces []network.SpaceInfo) error {
+	sb.MethodCall(sb, "SaveProviderSpaces", providerSpaces)
 	if err := sb.NextErr(); err != nil {
 		return err
 	}
@@ -599,7 +607,7 @@ func (sb *StubBacking) ReloadSpaces(environ environs.BootstrapEnviron) error {
 }
 
 // GoString implements fmt.GoStringer.
-func (se *StubBacking) GoString() string {
+func (sb *StubBacking) GoString() string {
 	return "&StubBacking{}"
 }
 
@@ -727,6 +735,14 @@ func (se *StubZonedNetworkingEnviron) GoString() string {
 
 func (se *StubZonedNetworkingEnviron) SupportsSpaces(ctx context.ProviderCallContext) (bool, error) {
 	se.MethodCall(se, "SupportsSpaces", ctx)
+	if err := se.NextErr(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (se *StubZonedNetworkingEnviron) SupportsSpaceDiscovery(ctx context.ProviderCallContext) (bool, error) {
+	se.MethodCall(se, "SupportsSpaceDiscovery", ctx)
 	if err := se.NextErr(); err != nil {
 		return false, err
 	}

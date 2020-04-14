@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/juju/errors"
+	"github.com/juju/loggo"
 	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/common"
@@ -14,10 +15,10 @@ import (
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/caas"
 	"github.com/juju/juju/caas/kubernetes/provider"
-	"github.com/juju/juju/cert"
 	"github.com/juju/juju/cloudconfig/podcfg"
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/environs/tags"
+	"github.com/juju/juju/pki"
 	"github.com/juju/juju/state"
 	"github.com/juju/juju/state/stateenvirons"
 	"github.com/juju/juju/state/watcher"
@@ -25,6 +26,8 @@ import (
 	"github.com/juju/juju/storage/poolmanager"
 	"github.com/juju/juju/version"
 )
+
+var logger = loggo.GetLogger("juju.apiserver.caasoperatorprovisioner")
 
 type API struct {
 	*common.PasswordChanger
@@ -44,7 +47,11 @@ func NewStateCAASOperatorProvisionerAPI(ctx facade.Context) (*API, error) {
 	authorizer := ctx.Auth()
 	resources := ctx.Resources()
 
-	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(ctx.State())
+	model, err := ctx.State().Model()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(model)
 	if err != nil {
 		return nil, errors.Annotate(err, "getting caas client")
 	}
@@ -92,43 +99,27 @@ func (a *API) WatchApplications() (params.StringsWatchResult, error) {
 }
 
 // OperatorProvisioningInfo returns the info needed to provision an operator.
-func (a *API) OperatorProvisioningInfo() (params.OperatorProvisioningInfo, error) {
+func (a *API) OperatorProvisioningInfo(args params.Entities) (params.OperatorProvisioningInfoResults, error) {
+	var result params.OperatorProvisioningInfoResults
 	cfg, err := a.state.ControllerConfig()
 	if err != nil {
-		return params.OperatorProvisioningInfo{}, err
+		return result, err
 	}
 
 	model, err := a.state.Model()
 	if err != nil {
-		return params.OperatorProvisioningInfo{}, errors.Trace(err)
+		return result, errors.Trace(err)
 	}
 	modelConfig, err := model.ModelConfig()
 	if err != nil {
-		return params.OperatorProvisioningInfo{}, errors.Trace(err)
+		return result, errors.Trace(err)
 	}
 
 	vers, ok := modelConfig.AgentVersion()
 	if !ok {
-		return params.OperatorProvisioningInfo{}, errors.NewNotValid(nil,
+		return result, errors.NewNotValid(nil,
 			fmt.Sprintf("agent version is missing in model config %q", modelConfig.Name()),
 		)
-	}
-
-	imagePath := podcfg.GetJujuOCIImagePath(cfg, vers.ToPatch(), version.OfficialBuild)
-	storageClassName, _ := modelConfig.AllAttrs()[provider.OperatorStorageKey].(string)
-	if storageClassName == "" {
-		return params.OperatorProvisioningInfo{}, errors.New("no operator storage class defined")
-	}
-	charmStorageParams, err := CharmStorageParams(cfg.ControllerUUID(), storageClassName, modelConfig, "", a.storagePoolManager, a.registry)
-	if err != nil {
-		return params.OperatorProvisioningInfo{}, errors.Annotatef(err, "getting operator storage parameters")
-	}
-	apiAddresses, err := a.APIAddresses()
-	if err == nil && apiAddresses.Error != nil {
-		err = apiAddresses.Error
-	}
-	if err != nil {
-		return params.OperatorProvisioningInfo{}, errors.Annotatef(err, "getting api addresses")
 	}
 
 	resourceTags := tags.ResourceTags(
@@ -136,15 +127,65 @@ func (a *API) OperatorProvisioningInfo() (params.OperatorProvisioningInfo, error
 		names.NewControllerTag(cfg.ControllerUUID()),
 		modelConfig,
 	)
-	charmStorageParams.Tags = resourceTags
 
-	return params.OperatorProvisioningInfo{
-		ImagePath:    imagePath,
-		Version:      vers,
-		APIAddresses: apiAddresses.Result,
-		CharmStorage: charmStorageParams,
-		Tags:         resourceTags,
-	}, nil
+	imagePath := podcfg.GetJujuOCIImagePath(cfg, vers.ToPatch(), version.OfficialBuild)
+	apiAddresses, err := a.APIAddresses()
+	if err == nil && apiAddresses.Error != nil {
+		err = apiAddresses.Error
+	}
+	if err != nil {
+		return result, errors.Annotatef(err, "getting api addresses")
+	}
+
+	oneProvisioningInfo := func(storageRequired bool) params.OperatorProvisioningInfo {
+		var charmStorageParams *params.KubernetesFilesystemParams
+		storageClassName, _ := modelConfig.AllAttrs()[provider.OperatorStorageKey].(string)
+		if storageRequired {
+			if storageClassName == "" {
+				return params.OperatorProvisioningInfo{
+					Error: common.ServerError(errors.New("no operator storage defined")),
+				}
+			} else {
+				charmStorageParams, err = CharmStorageParams(cfg.ControllerUUID(), storageClassName, modelConfig, "", a.storagePoolManager, a.registry)
+				if err != nil {
+					return params.OperatorProvisioningInfo{
+						Error: common.ServerError(errors.Annotatef(err, "getting operator storage parameters")),
+					}
+				}
+				charmStorageParams.Tags = resourceTags
+			}
+		}
+		return params.OperatorProvisioningInfo{
+			ImagePath:    imagePath,
+			Version:      vers,
+			APIAddresses: apiAddresses.Result,
+			CharmStorage: charmStorageParams,
+			Tags:         resourceTags,
+		}
+	}
+	result.Results = make([]params.OperatorProvisioningInfo, len(args.Entities))
+	for i, entity := range args.Entities {
+		appName, err := names.ParseApplicationTag(entity.Tag)
+		if err != nil {
+			result.Results[i].Error = common.ServerError(err)
+			continue
+		}
+		app, err := a.state.Application(appName.Id())
+		if err != nil {
+			result.Results[i].Error = common.ServerError(err)
+			continue
+		}
+		ch, _, err := app.Charm()
+		if err != nil {
+			result.Results[i].Error = common.ServerError(err)
+			continue
+		}
+		needStorage := provider.RequireOperatorStorage(ch.Meta().MinJujuVersion)
+		logger.Debugf("application %s has min-juju-version=%v, so charm storage is %v",
+			appName.String(), ch.Meta().MinJujuVersion, needStorage)
+		result.Results[i] = oneProvisioningInfo(needStorage)
+	}
+	return result, nil
 }
 
 // IssueOperatorCertificate issues an x509 certificate for use by the specified application operator.
@@ -160,26 +201,47 @@ func (a *API) IssueOperatorCertificate(args params.Entities) (params.IssueOperat
 		return params.IssueOperatorCertificateResults{}, errors.Trace(err)
 	}
 
+	authority, err := pki.NewDefaultAuthorityPemCAKey([]byte(caCert),
+		[]byte(si.CAPrivateKey))
+	if err != nil {
+		return params.IssueOperatorCertificateResults{}, errors.Trace(err)
+	}
+
 	res := params.IssueOperatorCertificateResults{
 		Results: make([]params.IssueOperatorCertificateResult, len(args.Entities)),
 	}
 	for i, entity := range args.Entities {
-		applicationName := entity.Tag
-
-		hostnames := []string{
-			applicationName,
-		}
-		cert, privateKey, err := cert.NewDefaultServer(caCert, si.CAPrivateKey, hostnames)
+		appTag, err := names.ParseApplicationTag(entity.Tag)
 		if err != nil {
 			res.Results[i] = params.IssueOperatorCertificateResult{
 				Error: common.ServerError(err),
 			}
 			continue
 		}
+
+		leaf, err := authority.LeafRequestForGroup(appTag.Name).
+			AddDNSNames(appTag.Name).
+			Commit()
+
+		if err != nil {
+			res.Results[i] = params.IssueOperatorCertificateResult{
+				Error: common.ServerError(err),
+			}
+			continue
+		}
+
+		cert, privateKey, err := leaf.ToPemParts()
+		if err != nil {
+			res.Results[i] = params.IssueOperatorCertificateResult{
+				Error: common.ServerError(err),
+			}
+			continue
+		}
+
 		res.Results[i] = params.IssueOperatorCertificateResult{
-			CACert:     caCert,
-			Cert:       cert,
-			PrivateKey: privateKey,
+			CACert:     string(caCert),
+			Cert:       string(cert),
+			PrivateKey: string(privateKey),
 		}
 	}
 
@@ -195,7 +257,7 @@ func CharmStorageParams(
 	poolName string,
 	poolManager poolmanager.PoolManager,
 	registry storage.ProviderRegistry,
-) (params.KubernetesFilesystemParams, error) {
+) (*params.KubernetesFilesystemParams, error) {
 	// The defaults here are for operator storage.
 	// Workload storage will override these elsewhere.
 	var size uint64 = 1024
@@ -205,7 +267,7 @@ func CharmStorageParams(
 		modelCfg,
 	)
 
-	result := params.KubernetesFilesystemParams{
+	result := &params.KubernetesFilesystemParams{
 		StorageName: "charm",
 		Size:        size,
 		Provider:    string(provider.K8s_ProviderType),
@@ -228,7 +290,7 @@ func CharmStorageParams(
 
 	providerType, attrs, err := poolStorageProvider(poolManager, registry, maybePoolName)
 	if err != nil && (!errors.IsNotFound(err) || poolName != "") {
-		return params.KubernetesFilesystemParams{}, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	if err == nil {
 		result.Provider = string(providerType)

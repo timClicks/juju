@@ -95,7 +95,7 @@ func (k *kubernetesClient) ensureSecret(sec *core.Secret) (func(), error) {
 	out, err := k.createSecret(sec)
 	if err == nil {
 		logger.Debugf("secret %q created", out.GetName())
-		cleanUp = func() { k.deleteSecret(out.GetName(), out.GetUID()) }
+		cleanUp = func() { _ = k.deleteSecret(out.GetName(), out.GetUID()) }
 		return cleanUp, nil
 	}
 	if !errors.IsAlreadyExists(err) {
@@ -156,7 +156,7 @@ func (k *kubernetesClient) deleteSecret(secretName string, uid types.UID) error 
 
 func (k *kubernetesClient) listSecrets(labels map[string]string) ([]core.Secret, error) {
 	listOps := v1.ListOptions{
-		LabelSelector: labelsToSelector(labels),
+		LabelSelector: labelSetToSelector(labels).String(),
 	}
 	secList, err := k.client().CoreV1().Secrets(k.namespace).List(listOps)
 	if err != nil {
@@ -172,7 +172,7 @@ func (k *kubernetesClient) deleteSecrets(appName string) error {
 	err := k.client().CoreV1().Secrets(k.namespace).DeleteCollection(&v1.DeleteOptions{
 		PropagationPolicy: &defaultPropagationPolicy,
 	}, v1.ListOptions{
-		LabelSelector: labelsToSelector(k.getSecretLabels(appName)),
+		LabelSelector: labelSetToSelector(k.getSecretLabels(appName)).String(),
 	})
 	if k8serrors.IsNotFound(err) {
 		return nil

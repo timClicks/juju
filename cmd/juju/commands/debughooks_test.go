@@ -4,12 +4,15 @@
 package commands
 
 import (
+	"encoding/base64"
 	"regexp"
 	"runtime"
+	"strings"
 
 	"github.com/juju/cmd/cmdtesting"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
+	goyaml "gopkg.in/yaml.v2"
 
 	jujussh "github.com/juju/juju/network/ssh"
 )
@@ -121,7 +124,7 @@ var debugHooksTests = []struct {
 }, {
 	info:  `invalid hook`,
 	args:  []string{"mysql/0", "invalid-hook"},
-	error: `unit "mysql/0" contains neither hook nor action "invalid-hook", valid actions are [anotherfakeaction fakeaction] and valid hooks are [collect-metrics config-changed install juju-info-relation-broken juju-info-relation-changed juju-info-relation-departed juju-info-relation-joined leader-deposed leader-elected leader-settings-changed meter-status-changed metrics-client-relation-broken metrics-client-relation-changed metrics-client-relation-departed metrics-client-relation-joined post-series-upgrade pre-series-upgrade remove server-admin-relation-broken server-admin-relation-changed server-admin-relation-departed server-admin-relation-joined server-relation-broken server-relation-changed server-relation-departed server-relation-joined start stop update-status upgrade-charm]`,
+	error: `unit "mysql/0" contains neither hook nor action "invalid-hook", valid actions are [anotherfakeaction fakeaction] and valid hooks are [collect-metrics config-changed install juju-info-relation-broken juju-info-relation-changed juju-info-relation-created juju-info-relation-departed juju-info-relation-joined leader-deposed leader-elected leader-settings-changed meter-status-changed metrics-client-relation-broken metrics-client-relation-changed metrics-client-relation-created metrics-client-relation-departed metrics-client-relation-joined post-series-upgrade pre-series-upgrade remove server-admin-relation-broken server-admin-relation-changed server-admin-relation-created server-admin-relation-departed server-admin-relation-joined server-relation-broken server-relation-changed server-relation-created server-relation-departed server-relation-joined start stop update-status upgrade-charm]`,
 }, {
 	info:  `no args at all`,
 	args:  nil,
@@ -152,4 +155,38 @@ func (s *DebugHooksSuite) TestDebugHooksCommand(c *gc.C) {
 			}
 		}
 	}
+}
+
+func (s *DebugHooksSuite) TestDebugHooksArgFormatting(c *gc.C) {
+	if runtime.GOOS == "windows" {
+		c.Skip("bug 1403084: Skipping on windows for now")
+	}
+	s.setupModel(c)
+	s.setHostChecker(validAddresses("0.public"))
+	ctx, err := cmdtesting.RunCommand(c, newDebugHooksCommand(s.hostChecker),
+		"mysql/0", "install", "start")
+	c.Check(err, jc.ErrorIsNil)
+	base64Regex := regexp.MustCompile("echo ([A-Za-z0-9+/]+=*) \\| base64")
+	c.Check(err, jc.ErrorIsNil)
+	rawContent := base64Regex.FindString(cmdtesting.Stdout(ctx))
+	c.Check(rawContent, gc.Not(gc.Equals), "")
+	// Strip off the "echo " and " | base64"
+	prefix := "echo "
+	suffix := " | base64"
+	c.Check(strings.HasPrefix(rawContent, prefix), jc.IsTrue)
+	c.Check(strings.HasSuffix(rawContent, suffix), jc.IsTrue)
+	b64content := rawContent[len(prefix) : len(rawContent)-len(suffix)]
+	scriptContent, err := base64.StdEncoding.DecodeString(b64content)
+	c.Assert(string(scriptContent), gc.Not(gc.Equals), "")
+	// Inside the script is another base64 encoded string telling us the debug-hook args
+	debugArgsRegex := regexp.MustCompile(`echo "([A-Z-a-z0-9+/]+=*)" \| base64.*-debug-hooks`)
+	debugArgsCommand := debugArgsRegex.FindString(string(scriptContent))
+	debugArgsB64 := debugArgsCommand[len(`echo "`):strings.Index(debugArgsCommand, `" | base64`)]
+	yamlContent, err := base64.StdEncoding.DecodeString(string(debugArgsB64))
+	var args map[string]interface{}
+	err = goyaml.Unmarshal(yamlContent, &args)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(args, gc.DeepEquals, map[string]interface{}{
+		"hooks": []interface{}{"install", "start"},
+	})
 }

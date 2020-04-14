@@ -80,32 +80,6 @@ func makeAddSubnetsArgs(cidr, providerId, space string, zones []string) apitesti
 	return args
 }
 
-func makeCreateSubnetsArgs(cidr, space string, zones []string, isPublic bool) apitesting.APICall {
-	spaceTag := names.NewSpaceTag(space).String()
-	subnetTag := names.NewSubnetTag(cidr).String()
-
-	expectArgs := params.CreateSubnetsParams{
-		Subnets: []params.CreateSubnetParams{{
-			SpaceTag:  spaceTag,
-			SubnetTag: subnetTag,
-			Zones:     zones,
-			IsPublic:  isPublic,
-		}}}
-
-	expectResults := params.ErrorResults{
-		Results: []params.ErrorResult{{}},
-	}
-
-	args := apitesting.APICall{
-		Facade:  "Subnets",
-		Method:  "CreateSubnets",
-		Args:    expectArgs,
-		Results: expectResults,
-	}
-
-	return args
-}
-
 func makeListSubnetsArgs(space *names.SpaceTag, zone string) apitesting.APICall {
 	expectResults := params.ListSubnetsResults{}
 	expectArgs := params.SubnetsFilters{
@@ -189,43 +163,6 @@ func (s *SubnetsSuite) TestAddSubnetV2(c *gc.C) {
 	c.Assert(called, jc.IsTrue)
 }
 
-func (s *SubnetsSuite) TestCreateSubnet(c *gc.C) {
-	c.Skip("CreateSubnet to be audited")
-	cidr := "1.1.1.0/24"
-	space := "bar"
-	zones := []string{"foo", "bar"}
-	isPublic := true
-	args := makeCreateSubnetsArgs(cidr, space, zones, isPublic)
-	s.prepareAPICall(c, args)
-	err := s.api.CreateSubnet(
-		names.NewSubnetTag(cidr),
-		names.NewSpaceTag(space),
-		zones,
-		isPublic,
-	)
-	c.Assert(s.apiCaller.CallCount, gc.Equals, 1)
-	c.Assert(err, jc.ErrorIsNil)
-}
-
-func (s *SubnetsSuite) TestCreateSubnetFails(c *gc.C) {
-	c.Skip("CreateSubnet to be audited ")
-	cidr := "1.1.1.0/24"
-	isPublic := true
-	space := "bar"
-	zones := []string{"foo", "bar"}
-	args := makeCreateSubnetsArgs(cidr, space, zones, isPublic)
-	args.Error = errors.New("bang")
-	s.prepareAPICall(c, args)
-	err := s.api.CreateSubnet(
-		names.NewSubnetTag(cidr),
-		names.NewSpaceTag(space),
-		zones,
-		isPublic,
-	)
-	c.Check(s.apiCaller.CallCount, gc.Equals, 1)
-	c.Assert(err, gc.ErrorMatches, "bang")
-}
-
 func (s *SubnetsSuite) TestListSubnetsNoResults(c *gc.C) {
 	space := names.NewSpaceTag("foo")
 	zone := "bar"
@@ -251,4 +188,61 @@ func (s *SubnetsSuite) TestListSubnetsFails(c *gc.C) {
 
 	var expectedResults []params.Subnet
 	c.Assert(results, jc.DeepEquals, expectedResults)
+}
+
+func (s *SubnetsSuite) testSubnetsByCIDR(c *gc.C,
+	cidrs []string,
+	results []params.SubnetsResult,
+	err error, expectErr string,
+) {
+	var expectedResults params.SubnetsResults
+	if results != nil {
+		expectedResults.Results = results
+	}
+
+	s.prepareAPICall(c, apitesting.APICall{
+		Facade:  "Subnets",
+		Method:  "SubnetsByCIDR",
+		Results: expectedResults,
+		Error:   err,
+	})
+	gotResult, gotErr := s.api.SubnetsByCIDR(cidrs)
+	c.Assert(s.apiCaller.CallCount, gc.Equals, 1)
+	c.Assert(gotResult, jc.DeepEquals, results)
+
+	if expectErr != "" {
+		c.Assert(gotErr, gc.ErrorMatches, expectErr)
+		return
+	}
+
+	if err != nil {
+		c.Assert(gotErr, jc.DeepEquals, err)
+	} else {
+		c.Assert(gotErr, jc.ErrorIsNil)
+	}
+}
+
+func (s *SubnetsSuite) TestSubnetsByCIDRWithNoCIDRs(c *gc.C) {
+	var cidrs []string
+
+	s.testSubnetsByCIDR(c, cidrs, []params.SubnetsResult{}, nil, "")
+}
+
+func (s *SubnetsSuite) TestSubnetsByCIDRWithNoResults(c *gc.C) {
+	cidrs := []string{"10.0.1.10/24"}
+
+	s.testSubnetsByCIDR(c, cidrs, []params.SubnetsResult{}, nil, "")
+}
+
+func (s *SubnetsSuite) TestSubnetsByCIDRWithResults(c *gc.C) {
+	cidrs := []string{"10.0.1.10/24"}
+
+	s.testSubnetsByCIDR(c, cidrs, []params.SubnetsResult{{
+		Subnets: []params.SubnetV2{{
+			ID: "aaabbb",
+			Subnet: params.Subnet{
+				CIDR: "10.0.1.10/24",
+			},
+		}},
+	}}, nil, "")
 }

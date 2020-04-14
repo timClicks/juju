@@ -30,7 +30,7 @@ func (s *environSuite) TestGetNewEnvironFunc(c *gc.C) {
 		callArgs = args
 		return nil, nil
 	}
-	_, err := stateenvirons.GetNewEnvironFunc(newEnviron)(s.State)
+	_, err := stateenvirons.GetNewEnvironFunc(newEnviron)(s.Model)
 	c.Assert(err, jc.ErrorIsNil)
 
 	c.Assert(calls, gc.Equals, 1)
@@ -59,7 +59,39 @@ func (s *environSuite) TestCloudSpec(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 
 	emptyCredential.Label = "empty-credential"
-	cloudSpec, err := stateenvirons.EnvironConfigGetter{State: st, Model: m}.CloudSpec()
+	cloudSpec, err := stateenvirons.EnvironConfigGetter{Model: m}.CloudSpec()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(cloudSpec, jc.DeepEquals, environs.CloudSpec{
+		Type:             "dummy",
+		Name:             "dummy",
+		Region:           "dummy-region",
+		Endpoint:         "dummy-endpoint",
+		IdentityEndpoint: "dummy-identity-endpoint",
+		StorageEndpoint:  "dummy-storage-endpoint",
+		Credential:       &emptyCredential,
+	})
+}
+
+func (s *environSuite) TestCloudSpecForModel(c *gc.C) {
+	owner := s.Factory.MakeUser(c, nil).UserTag()
+	emptyCredential := cloud.NewEmptyCredential()
+	tag := names.NewCloudCredentialTag("dummy/" + owner.Id() + "/empty-credential")
+	err := s.State.UpdateCloudCredential(tag, emptyCredential)
+	c.Assert(err, jc.ErrorIsNil)
+
+	st := s.Factory.MakeModel(c, &factory.ModelParams{
+		Name:            "foo",
+		CloudName:       "dummy",
+		CloudCredential: tag,
+		Owner:           owner,
+	})
+	defer st.Close()
+
+	m, err := st.Model()
+	c.Assert(err, jc.ErrorIsNil)
+
+	emptyCredential.Label = "empty-credential"
+	cloudSpec, err := stateenvirons.CloudSpecForModel(m)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(cloudSpec, jc.DeepEquals, environs.CloudSpec{
 		Type:             "dummy",
@@ -80,7 +112,7 @@ func (s *environSuite) TestGetNewCAASBrokerFunc(c *gc.C) {
 		callArgs = args
 		return nil, nil
 	}
-	_, err := stateenvirons.GetNewCAASBrokerFunc(newBroker)(s.State)
+	_, err := stateenvirons.GetNewCAASBrokerFunc(newBroker)(s.Model)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(calls, gc.Equals, 1)
 
@@ -116,7 +148,7 @@ func (s *environSuite) TestCloudAPIVersion(c *gc.C) {
 		return &fakeBroker{}, nil
 	}
 
-	envConfigGetter := stateenvirons.EnvironConfigGetter{State: st, Model: m, NewContainerBroker: newBrokerFunc}
+	envConfigGetter := stateenvirons.EnvironConfigGetter{Model: m, NewContainerBroker: newBrokerFunc}
 	cloudSpec, err := envConfigGetter.CloudSpec()
 	c.Assert(err, jc.ErrorIsNil)
 	apiVersion, err := envConfigGetter.CloudAPIVersion(cloudSpec)

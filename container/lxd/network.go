@@ -22,6 +22,7 @@ const (
 	nic            = "nic"
 	nicTypeBridged = "bridged"
 	nicTypeMACVLAN = "macvlan"
+	netTypeBridge  = "bridge"
 )
 
 // device is a type alias for profile devices.
@@ -88,8 +89,8 @@ func (s *Server) EnsureIPv4(netName string) (bool, error) {
 
 // GetNICsFromProfile returns all NIC devices in the profile with the input
 // name. All returned devices have a MAC address; generated if required.
-func (s *Server) GetNICsFromProfile(profName string) (map[string]device, error) {
-	profile, _, err := s.GetProfile(lxdDefaultProfileName)
+func (s *Server) GetNICsFromProfile(profileName string) (map[string]device, error) {
+	profile, _, err := s.GetProfile(profileName)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -138,7 +139,7 @@ func (s *Server) ensureDefaultNetworking(profile *api.Profile, eTag string) erro
 		}
 		req := api.NetworksPost{
 			Name:    network.DefaultLXDBridge,
-			Type:    "bridge",
+			Type:    netTypeBridge,
 			Managed: true,
 			NetworkPut: api.NetworkPut{Config: map[string]string{
 				"ipv4.address": "auto",
@@ -170,7 +171,7 @@ func (s *Server) ensureDefaultNetworking(profile *api.Profile, eTag string) erro
 
 	// Add the new device with the bridge as its parent.
 	nicType := nicTypeMACVLAN
-	if net.Type == "bridge" {
+	if net.Type == netTypeBridge {
 		nicType = nicTypeBridged
 	}
 	profile.Devices[nicName] = device{
@@ -194,11 +195,13 @@ func (s *Server) verifyNICsWithAPI(nics map[string]device) error {
 	for name, nic := range nics {
 		checked = append(checked, name)
 
-		if !isValidNICType(nic) {
-			continue
+		// Versions of the LXD profile prior to 3.22 have the network name as
+		// "parent" under NIC entries in the "devices" list.
+		// Later versions have it under "network".
+		netName, ok := nic["network"]
+		if !ok {
+			netName = nic["parent"]
 		}
-
-		netName := nic["parent"]
 		if netName == "" {
 			continue
 		}
@@ -207,8 +210,17 @@ func (s *Server) verifyNICsWithAPI(nics map[string]device) error {
 		if err != nil {
 			return errors.Annotatef(err, "retrieving network %q", netName)
 		}
+
 		if err := verifyNoIPv6(net); err != nil {
 			ipV6ErrMsg = err
+			continue
+		}
+
+		// Versions of the LXD profile prior to 3.22 have a "nictype" member
+		// under NIC entries in the "devices" list.
+		// Later versions were observed to have this member absent,
+		// however this information is available from the actual network.
+		if !isValidNetworkType(net) && !isValidNICType(nic) {
 			continue
 		}
 
@@ -317,6 +329,10 @@ func verifyNoIPv6(net *api.Network) error {
 
 func isValidNICType(nic device) bool {
 	return nic["nictype"] == nicTypeBridged || nic["nictype"] == nicTypeMACVLAN
+}
+
+func isValidNetworkType(net *api.Network) bool {
+	return net.Type == netTypeBridge || net.Type == nicTypeMACVLAN
 }
 
 const BridgeConfigFile = "/etc/default/lxd-bridge"
@@ -485,7 +501,7 @@ func DevicesFromInterfaceInfo(interfaces []corenetwork.InterfaceInfo) (map[strin
 func newNICDevice(deviceName, parentDevice, hwAddr string, mtu int) device {
 	device := map[string]string{
 		"type":    "nic",
-		"nictype": "bridged",
+		"nictype": nicTypeBridged,
 		"name":    deviceName,
 		"parent":  parentDevice,
 	}

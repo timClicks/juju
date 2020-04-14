@@ -43,7 +43,10 @@ func (s *StorageStateSuiteBase) SetUpTest(c *gc.C) {
 	if s.series == "kubernetes" {
 		s.st = s.Factory.MakeCAASModel(c, nil)
 		s.AddCleanup(func(_ *gc.C) { s.st.Close() })
-		broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(s.st)
+		var err error
+		s.Model, err = s.st.Model()
+		c.Assert(err, jc.ErrorIsNil)
+		broker, err := stateenvirons.GetNewCAASBrokerFunc(caas.New)(s.Model)
 		c.Assert(err, jc.ErrorIsNil)
 		registry = stateenvirons.NewStorageProviderRegistry(broker)
 	} else {
@@ -694,13 +697,10 @@ func (s *StorageStateSuite) TestRemoveStoragePoolInUse(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(pool.Name(), gc.Equals, poolName)
 
-	// pool does not exist at all, poolmanager swallows NotFound errors.
 	_, err = s.pm.Get("nope-pool")
 	c.Assert(err, gc.ErrorMatches, `pool "nope-pool" not found`)
 	err = s.storageBackend.RemoveStoragePool("nope-pool")
-	c.Assert(err, jc.ErrorIsNil)
-	_, err = s.pm.Get("nope-pool")
-	c.Assert(err, gc.ErrorMatches, `pool "nope-pool" not found`)
+	c.Assert(err, gc.ErrorMatches, `storage pool "nope-pool" not found`)
 }
 
 func (s *StorageStateSuite) TestStorageAttachments(c *gc.C) {

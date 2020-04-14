@@ -14,14 +14,13 @@ import (
 	"github.com/juju/romulus"
 	"github.com/juju/schema"
 	"github.com/juju/utils"
-	utilscert "github.com/juju/utils/cert"
 	"gopkg.in/juju/charmrepo.v4/csclient"
 	"gopkg.in/juju/environschema.v1"
 	"gopkg.in/juju/names.v3"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 
-	"github.com/juju/juju/cert"
 	"github.com/juju/juju/core/resources"
+	"github.com/juju/juju/pki"
 )
 
 const (
@@ -180,6 +179,18 @@ const (
 	// to not sleep at all.
 	PruneTxnSleepTime = "prune-txn-sleep-time"
 
+	// MaxCharmStateSize is the maximum allowed size of charm-specific
+	// per-unit state data that charms can store to the controller in
+	// bytes. A value of 0 disables the quota checks although in
+	// principle, mongo imposes a hard (but configurable) limit of 16M.
+	MaxCharmStateSize = "max-charm-state-size"
+
+	// MaxAgentStateSize is the maximum allowed size of internal state
+	// data that agents can store to the controller in bytes. A value of 0
+	// disables the quota checks although in principle, mongo imposes a
+	// hard (but configurable) limit of 16M.
+	MaxAgentStateSize = "max-agent-state-size"
+
 	// Attribute Defaults
 
 	// DefaultAgentRateLimitMax allows the first 10 agents to connect without any
@@ -257,6 +268,14 @@ const (
 	// other systems to operate concurrently.
 	DefaultPruneTxnSleepTime = "10ms"
 
+	// DefaultMaxCharmStateSize is the maximum size (in bytes) of charm
+	// state data that each unit can store to the controller.
+	DefaultMaxCharmStateSize = 2 * 1024 * 1024
+
+	// DefaultMaxAgentStateSize is the maximum size (in bytes) of internal
+	// state data that agents can store to the controller.
+	DefaultMaxAgentStateSize = 512 * 1024
+
 	// JujuHASpace is the network space within which the MongoDB replica-set
 	// should communicate.
 	JujuHASpace = "juju-ha-space"
@@ -322,6 +341,20 @@ var (
 		CAASImageRepo,
 		Features,
 		MeteringURL,
+		MaxCharmStateSize,
+		MaxAgentStateSize,
+	}
+
+	// For backwards compatibility, we must include "anything", "juju-apiserver"
+	// and "juju-mongodb" as hostnames as that is what clients specify
+	// as the hostname for verification (this certificate is used both
+	// for serving MongoDB and API server connections).  We also
+	// explicitly include localhost.
+	DefaultDNSNames = []string{
+		"localhost",
+		"juju-apiserver",
+		"juju-mongodb",
+		"anything",
 	}
 
 	// AllowedUpdateConfigAttributes contains all of the controller
@@ -352,6 +385,8 @@ var (
 		CAASOperatorImagePath,
 		CAASImageRepo,
 		Features,
+		MaxCharmStateSize,
+		MaxAgentStateSize,
 	)
 
 	// DefaultAuditLogExcludeMethods is the default list of methods to
@@ -762,6 +797,19 @@ func (c Config) MeteringURL() string {
 	return url
 }
 
+// MaxCharmStateSize returns the max size (in bytes) of charm-specific state
+// that each unit can store to the controller. A value of zero indicates no
+// limit.
+func (c Config) MaxCharmStateSize() int {
+	return c.intOrDefault(MaxCharmStateSize, DefaultMaxCharmStateSize)
+}
+
+// MaxAgentStateSize returns the max size (in bytes) of state data that agents
+// can store to the controller. A value of zero indicates no limit.
+func (c Config) MaxAgentStateSize() int {
+	return c.intOrDefault(MaxAgentStateSize, DefaultMaxAgentStateSize)
+}
+
 // Validate ensures that config is a valid configuration.
 func Validate(c Config) error {
 	if v, ok := c[IdentityPublicKey].(string); ok {
@@ -789,8 +837,10 @@ func Validate(c Config) error {
 	if !caCertOK {
 		return errors.Errorf("missing CA certificate")
 	}
-	if _, err := utilscert.ParseCert(caCert); err != nil {
+	if ok, err := pki.IsPemCA([]byte(caCert)); err != nil {
 		return errors.Annotate(err, "bad CA certificate in configuration")
+	} else if !ok {
+		return errors.New("ca certificate in configuration is not a CA")
 	}
 
 	if uuid, ok := c[ControllerUUIDKey].(string); ok && !utils.IsValidUUIDString(uuid) {
@@ -937,6 +987,32 @@ func Validate(c Config) error {
 		}
 	}
 
+	// Each unit stores the charm and uniter state in a single document.
+	// Given that mongo by default enforces a 16M limit for documents we
+	// should also verify that the combined limits don't exceed 16M.
+	var maxUnitStateSize int
+	if v, ok := c[MaxCharmStateSize].(int); ok {
+		if v < 0 {
+			return errors.Errorf("invalid max charm state size: should be a number of bytes (or 0 to disable limit), got %d", v)
+		}
+		maxUnitStateSize += v
+	} else {
+		maxUnitStateSize += DefaultMaxCharmStateSize
+	}
+
+	if v, ok := c[MaxAgentStateSize].(int); ok {
+		if v < 0 {
+			return errors.Errorf("invalid max agent state size: should be a number of bytes (or 0 to disable limit), got %d", v)
+		}
+		maxUnitStateSize += v
+	} else {
+		maxUnitStateSize += DefaultMaxAgentStateSize
+	}
+
+	if mongoMax := 16 * 1024 * 1024; maxUnitStateSize > mongoMax {
+		return errors.Errorf("invalid max charm/agent state sizes: combined value should not exceed mongo's 16M per-document limit, got %d", maxUnitStateSize)
+	}
+
 	return nil
 }
 
@@ -989,12 +1065,6 @@ func (c Config) AsSpaceConstraints(spaces *[]string) *[]string {
 	return &ns
 }
 
-// GenerateControllerCertAndKey makes sure that the config has a CACert and
-// CAPrivateKey, generates and returns new certificate and key.
-func GenerateControllerCertAndKey(caCert, caKey string, hostAddresses []string) (string, string, error) {
-	return cert.NewDefaultServer(caCert, caKey, hostAddresses)
-}
-
 var configChecker = schema.FieldMap(schema.Fields{
 	AgentRateLimitMax:       schema.ForceInt(),
 	AgentRateLimitRate:      schema.TimeDuration(),
@@ -1031,6 +1101,8 @@ var configChecker = schema.FieldMap(schema.Fields{
 	Features:                schema.List(schema.String()),
 	CharmStoreURL:           schema.String(),
 	MeteringURL:             schema.String(),
+	MaxCharmStateSize:       schema.ForceInt(),
+	MaxAgentStateSize:       schema.ForceInt(),
 }, schema.Defaults{
 	AgentRateLimitMax:       schema.Omit,
 	AgentRateLimitRate:      schema.Omit,
@@ -1067,6 +1139,8 @@ var configChecker = schema.FieldMap(schema.Fields{
 	Features:                schema.Omit,
 	CharmStoreURL:           csclient.ServerURL,
 	MeteringURL:             romulus.DefaultAPIRoot,
+	MaxCharmStateSize:       DefaultMaxCharmStateSize,
+	MaxAgentStateSize:       DefaultMaxAgentStateSize,
 })
 
 // ConfigSchema holds information on all the fields defined by
@@ -1218,5 +1292,13 @@ Use "caas-image-repo" instead.`,
 	MeteringURL: {
 		Type:        environschema.Tstring,
 		Description: `The url for metrics`,
+	},
+	MaxCharmStateSize: {
+		Type:        environschema.Tint,
+		Description: `The maximum size (in bytes) of charm-specific state that units can store to the controller`,
+	},
+	MaxAgentStateSize: {
+		Type:        environschema.Tint,
+		Description: `The maximum size (in bytes) of internal state data that agents can store to the controller`,
 	},
 }

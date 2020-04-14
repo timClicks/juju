@@ -5,7 +5,6 @@ package network
 
 import (
 	"net"
-	"sort"
 	"strings"
 
 	"github.com/juju/collections/set"
@@ -33,51 +32,51 @@ func newFanCIDRs(overlay, underlay string) *FanCIDRs {
 // It may originate from state, or from a provider.
 type SubnetInfo struct {
 	// CIDR of the network, in 123.45.67.89/24 format.
-	CIDR string `json:"cidr" yaml:"cidr"`
+	CIDR string
 
 	// Memoized value for the parsed network for the above CIDR.
 	parsedCIDRNetwork *net.IPNet
 
 	// ProviderId is a provider-specific subnet ID.
-	ProviderId Id `json:"provider-id,omitempty" yaml:"provider-id,omitempty"`
+	ProviderId Id
 
 	// ProviderSpaceId holds the provider ID of the space associated
 	// with this subnet. Can be empty if not supported.
-	ProviderSpaceId Id `json:"provider-space-id,omitempty" yaml:"provider-space-id,omitempty"`
+	ProviderSpaceId Id
 
 	// ProviderNetworkId holds the provider ID of the network
 	// containing this subnet, for example VPC id for EC2.
-	ProviderNetworkId Id `json:"provider-network-id,omitempty" yaml:"provider-network-id,omitempty"`
+	ProviderNetworkId Id
 
 	// VLANTag needs to be between 1 and 4094 for VLANs and 0 for
 	// normal networks. It's defined by IEEE 802.1Q standard, and used
 	// to define a VLAN network. For more information, see:
 	// http://en.wikipedia.org/wiki/IEEE_802.1Q.
-	VLANTag int `json:"vlan-tag" yaml:"vlan-tag"`
+	VLANTag int
 
 	// AvailabilityZones describes which availability zones this
 	// subnet is in. It can be empty if the provider does not support
 	// availability zones.
-	AvailabilityZones []string `json:"zones,omitempty" yaml:"zones,omitempty"`
+	AvailabilityZones []string
 
 	// SpaceID is the id of the space the subnet is associated with.
 	// Default value should be AlphaSpaceId. It can be empty if
 	// the subnet is returned from an networkingEnviron. SpaceID is
 	// preferred over SpaceName in state and non networkingEnviron use.
-	SpaceID string `json:"space-id,omitempty" yaml:"space-id,omitempty"`
+	SpaceID string
 
 	// SpaceName is the name of the space the subnet is associated with.
 	// An empty string indicates it is part of the AlphaSpaceName OR
 	// if the SpaceID is set. Should primarily be used in an networkingEnviron.
-	SpaceName string `json:"space-name,omitempty" yaml:"space-name,omitempty"`
+	SpaceName string
 
 	// FanInfo describes the fan networking setup for the subnet.
 	// It may be empty if this is not a fan subnet,
 	// or if this subnet information comes from a provider.
-	FanInfo *FanCIDRs `json:"fan-info,omitempty" yaml:"fan-info,omitempty"`
+	FanInfo *FanCIDRs
 
 	// IsPublic describes whether a subnet is public or not.
-	IsPublic bool `json:"is-public,omitempty" yaml:"is-public,omitempty"`
+	IsPublic bool
 }
 
 // SetFan sets the fan networking information for the subnet.
@@ -131,6 +130,8 @@ func (s *SubnetInfo) ParsedCIDRNetwork() (*net.IPNet, error) {
 	return s.parsedCIDRNetwork, nil
 }
 
+type SubnetInfos []SubnetInfo
+
 // IsValidCidr returns whether cidr is a valid subnet CIDR.
 func IsValidCidr(cidr string) bool {
 	_, ipNet, err := net.ParseCIDR(cidr)
@@ -163,62 +164,6 @@ func FindSubnetIDsForAvailabilityZone(zoneName string, subnetsToZones map[Id][]s
 	}
 
 	return sorted, nil
-}
-
-// SubnetSet represents the classic "set" data structure, and contains Id.
-// SubnetSet is used as a typed version to prevent string -> Id -> string
-// conversion when using set.Strings
-type SubnetSet map[Id]struct{}
-
-// MakeSubnetSet creates and initializes a SubnetSet and populates it with
-// initial values as specified in the parameters.
-func MakeSubnetSet(values ...Id) SubnetSet {
-	set := make(map[Id]struct{}, len(values))
-	for _, id := range values {
-		set[id] = struct{}{}
-	}
-	return set
-}
-
-// Add puts a value into the set.
-func (s SubnetSet) Add(value Id) {
-	s[value] = struct{}{}
-}
-
-// Size returns the number of elements in the set.
-func (s SubnetSet) Size() int {
-	return len(s)
-}
-
-// IsEmpty is true for empty or uninitialized sets.
-func (s SubnetSet) IsEmpty() bool {
-	return len(s) == 0
-}
-
-// Contains returns true if the value is in the set, and false otherwise.
-func (s SubnetSet) Contains(id Id) bool {
-	_, exists := s[id]
-	return exists
-}
-
-// Values returns an unordered slice containing all the values in the set.
-func (s SubnetSet) Values() []Id {
-	result := make([]Id, len(s))
-	i := 0
-	for key := range s {
-		result[i] = key
-		i++
-	}
-	return result
-}
-
-// SortedValues returns an ordered slice containing all the values in the set.
-func (s SubnetSet) SortedValues() []Id {
-	values := s.Values()
-	sort.Slice(values, func(i, j int) bool {
-		return values[i] < values[j]
-	})
-	return values
 }
 
 // InFan describes a network fan type.

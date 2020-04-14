@@ -38,6 +38,7 @@ import (
 	"github.com/juju/juju/storage/provider"
 	coretesting "github.com/juju/juju/testing"
 	"github.com/juju/juju/tools"
+	jujuversion "github.com/juju/juju/version"
 )
 
 type ApplicationSuite struct {
@@ -328,6 +329,31 @@ func (s *ApplicationSuite) TestSetCAASCharmInvalid(c *gc.C) {
 	c.Assert(err, gc.NotNil)
 	msg := strings.Replace(err.Error(), "\n", "", -1)
 	c.Assert(msg, gc.Matches, "Juju on k8s does not support updating deployment info.*")
+}
+
+func (s *ApplicationSuite) TestDeployCAASOperatorProtectedByFlag(c *gc.C) {
+	s.model.modelType = state.ModelTypeCAAS
+	s.setAPIUser(c, names.NewUserTag("admin"))
+	s.backend.charm = &mockCharm{
+		meta: &charm.Meta{
+			Deployment: &charm.Deployment{
+				DeploymentMode: charm.ModeOperator,
+			},
+		},
+	}
+	args := params.ApplicationsDeploy{
+		Applications: []params.ApplicationDeploy{{
+			ApplicationName: "foo",
+			CharmURL:        "local:foo-0",
+			NumUnits:        1,
+		}},
+	}
+	result, err := s.api.Deploy(args)
+	c.Assert(err, jc.ErrorIsNil)
+	err = result.OneError()
+	c.Assert(err, gc.NotNil)
+	msg := strings.Replace(err.Error(), "\n", "", -1)
+	c.Assert(msg, gc.Matches, `feature flag "k8s-operators" is required for deploying k8s operator charms`)
 }
 
 func (s *ApplicationSuite) TestSetCharmConfigSettings(c *gc.C) {
@@ -820,6 +846,29 @@ func (s *ApplicationSuite) TestDeployCAASModelNoOperatorStorage(c *gc.C) {
 	c.Assert(strings.Replace(msg, "\n", "", -1), gc.Matches, `deploying a Kubernetes application requires a suitable storage class.*`)
 }
 
+func (s *ApplicationSuite) TestDeployCAASModelCharmNeedsNoOperatorStorage(c *gc.C) {
+	s.model.modelType = state.ModelTypeCAAS
+	delete(s.model.cfg, "operator-storage")
+	s.PatchValue(&jujuversion.Current, version.MustParse("2.8-beta1"))
+	s.backend.charm = &mockCharm{
+		meta: &charm.Meta{
+			MinJujuVersion: version.MustParse("2.8.0"),
+		},
+	}
+
+	args := params.ApplicationsDeploy{
+		Applications: []params.ApplicationDeploy{{
+			ApplicationName: "foo",
+			CharmURL:        "local:foo-0",
+			NumUnits:        1,
+		}},
+	}
+	result, err := s.api.Deploy(args)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(result.Results, gc.HasLen, 1)
+	c.Assert(result.Results[0].Error, gc.IsNil)
+}
+
 func (s *ApplicationSuite) TestDeployCAASModelDefaultOperatorStorageClass(c *gc.C) {
 	s.model.modelType = state.ModelTypeCAAS
 	s.storagePoolManager.SetErrors(errors.NotFoundf("pool"))
@@ -946,7 +995,55 @@ func (s *ApplicationSuite) TestScaleApplicationsCAASModel(c *gc.C) {
 		}},
 	})
 	app := s.backend.applications["postgresql"]
-	app.CheckCall(c, 0, "Scale", 5)
+	app.CheckCall(c, 1, "Scale", 5)
+}
+
+func (s *ApplicationSuite) TestScaleApplicationsNotAllowedForOperator(c *gc.C) {
+	s.model.modelType = state.ModelTypeCAAS
+	s.setAPIUser(c, names.NewUserTag("admin"))
+	s.backend.applications["postgresql"].charm = &mockCharm{
+		meta: &charm.Meta{
+			Deployment: &charm.Deployment{
+				DeploymentMode: charm.ModeOperator,
+			},
+		},
+	}
+	args := params.ScaleApplicationsParams{
+		Applications: []params.ScaleApplicationParams{{
+			ApplicationTag: "application-postgresql",
+			Scale:          5,
+		}},
+	}
+	result, err := s.api.ScaleApplications(args)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(result.Results, gc.HasLen, 1)
+	c.Assert(result.Results[0].Error, gc.NotNil)
+	msg := strings.Replace(result.Results[0].Error.Error(), "\n", "", -1)
+	c.Assert(msg, gc.Matches, `scale an "operator" application not supported`)
+}
+
+func (s *ApplicationSuite) TestScaleApplicationsNotAllowedForDaemonSet(c *gc.C) {
+	s.model.modelType = state.ModelTypeCAAS
+	s.setAPIUser(c, names.NewUserTag("admin"))
+	s.backend.applications["postgresql"].charm = &mockCharm{
+		meta: &charm.Meta{
+			Deployment: &charm.Deployment{
+				DeploymentType: charm.DeploymentDaemon,
+			},
+		},
+	}
+	args := params.ScaleApplicationsParams{
+		Applications: []params.ScaleApplicationParams{{
+			ApplicationTag: "application-postgresql",
+			Scale:          5,
+		}},
+	}
+	result, err := s.api.ScaleApplications(args)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(result.Results, gc.HasLen, 1)
+	c.Assert(result.Results[0].Error, gc.NotNil)
+	msg := strings.Replace(result.Results[0].Error.Error(), "\n", "", -1)
+	c.Assert(msg, gc.Matches, `scale a "daemon" application not supported`)
 }
 
 func (s *ApplicationSuite) TestScaleApplicationsBlocked(c *gc.C) {
@@ -977,7 +1074,7 @@ func (s *ApplicationSuite) TestScaleApplicationsCAASModelScaleChange(c *gc.C) {
 		}},
 	})
 	app := s.backend.applications["postgresql"]
-	app.CheckCall(c, 0, "ChangeScale", 5)
+	app.CheckCall(c, 1, "ChangeScale", 5)
 }
 
 func (s *ApplicationSuite) TestScaleApplicationsCAASModelScaleArgCheck(c *gc.C) {

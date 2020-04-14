@@ -5,18 +5,17 @@
 package mocks
 
 import (
-	reflect "reflect"
-
 	gomock "github.com/golang/mock/gomock"
 	agent "github.com/juju/juju/agent"
 	api "github.com/juju/juju/api"
-	params "github.com/juju/juju/apiserver/params"
+	controller "github.com/juju/juju/controller"
 	model "github.com/juju/juju/core/model"
 	network "github.com/juju/juju/core/network"
 	mongo "github.com/juju/juju/mongo"
 	shell "github.com/juju/utils/shell"
 	version "github.com/juju/version"
 	names_v3 "gopkg.in/juju/names.v3"
+	reflect "reflect"
 )
 
 // MockAgent is a mock of Agent interface
@@ -285,9 +284,9 @@ func (mr *MockConfigMockRecorder) OldPassword() *gomock.Call {
 }
 
 // StateServingInfo mocks base method
-func (m *MockConfig) StateServingInfo() (params.StateServingInfo, bool) {
+func (m *MockConfig) StateServingInfo() (controller.StateServingInfo, bool) {
 	ret := m.ctrl.Call(m, "StateServingInfo")
-	ret0, _ := ret[0].(params.StateServingInfo)
+	ret0, _ := ret[0].(controller.StateServingInfo)
 	ret1, _ := ret[1].(bool)
 	return ret0, ret1
 }
@@ -319,6 +318,18 @@ func (m *MockConfig) Tag() names_v3.Tag {
 // Tag indicates an expected call of Tag
 func (mr *MockConfigMockRecorder) Tag() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tag", reflect.TypeOf((*MockConfig)(nil).Tag))
+}
+
+// TransientDataDir mocks base method
+func (m *MockConfig) TransientDataDir() string {
+	ret := m.ctrl.Call(m, "TransientDataDir")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TransientDataDir indicates an expected call of TransientDataDir
+func (mr *MockConfigMockRecorder) TransientDataDir() *gomock.Call {
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransientDataDir", reflect.TypeOf((*MockConfig)(nil).TransientDataDir))
 }
 
 // UpgradedToVersion mocks base method
@@ -669,7 +680,7 @@ func (mr *MockConfigSetterMockRecorder) SetPassword(arg0 interface{}) *gomock.Ca
 }
 
 // SetStateServingInfo mocks base method
-func (m *MockConfigSetter) SetStateServingInfo(arg0 params.StateServingInfo) {
+func (m *MockConfigSetter) SetStateServingInfo(arg0 controller.StateServingInfo) {
 	m.ctrl.Call(m, "SetStateServingInfo", arg0)
 }
 
@@ -699,9 +710,9 @@ func (mr *MockConfigSetterMockRecorder) SetValue(arg0, arg1 interface{}) *gomock
 }
 
 // StateServingInfo mocks base method
-func (m *MockConfigSetter) StateServingInfo() (params.StateServingInfo, bool) {
+func (m *MockConfigSetter) StateServingInfo() (controller.StateServingInfo, bool) {
 	ret := m.ctrl.Call(m, "StateServingInfo")
-	ret0, _ := ret[0].(params.StateServingInfo)
+	ret0, _ := ret[0].(controller.StateServingInfo)
 	ret1, _ := ret[1].(bool)
 	return ret0, ret1
 }
@@ -733,6 +744,18 @@ func (m *MockConfigSetter) Tag() names_v3.Tag {
 // Tag indicates an expected call of Tag
 func (mr *MockConfigSetterMockRecorder) Tag() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tag", reflect.TypeOf((*MockConfigSetter)(nil).Tag))
+}
+
+// TransientDataDir mocks base method
+func (m *MockConfigSetter) TransientDataDir() string {
+	ret := m.ctrl.Call(m, "TransientDataDir")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TransientDataDir indicates an expected call of TransientDataDir
+func (mr *MockConfigSetterMockRecorder) TransientDataDir() *gomock.Call {
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransientDataDir", reflect.TypeOf((*MockConfigSetter)(nil).TransientDataDir))
 }
 
 // UpgradedToVersion mocks base method

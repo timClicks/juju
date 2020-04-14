@@ -157,7 +157,7 @@ func (u *Unit) AddMetrics(metrics []params.Metric) error {
 	return result.OneError()
 }
 
-// AddMetricsBatches makes an api call to the uniter requesting it to store metrics batches in state.
+// AddMetricBatches makes an api call to the uniter requesting it to store metrics batches in state.
 func (u *Unit) AddMetricBatches(batches []params.MetricBatch) (map[string]error, error) {
 	p := params.MetricBatchParams{
 		Batches: make([]params.MetricBatchParam, len(batches)),
@@ -700,7 +700,7 @@ type RelationStatus struct {
 	InScope bool
 }
 
-// RelationsInScope returns the tags of the relations the unit has joined
+// RelationsStatus returns the tags of the relations the unit has joined
 // and entered scope, or the relation is suspended.
 func (u *Unit) RelationsStatus() ([]RelationStatus, error) {
 	args := params.Entities{
@@ -844,24 +844,16 @@ func (u *Unit) UpdateNetworkInfo() error {
 	return results.OneError()
 }
 
-// State returns the state persisted by the charm running in this unit.
-func (u *Unit) State() (map[string]string, error) {
-	var results params.UnitStateResults
-	args := params.Entities{
-		Entities: []params.Entity{{Tag: u.tag.String()}},
-	}
-	err := u.st.facade.FacadeCall("State", args, &results)
-	if err != nil {
-		return nil, err
-	}
-	if len(results.Results) != 1 {
-		return nil, errors.Errorf("expected 1 result, got %d", len(results.Results))
-	}
-	result := results.Results[0]
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return result.State, nil
+// State returns the state persisted by the charm running in this unit
+// and the state internal to the uniter for this unit.
+func (u *Unit) State() (params.UnitStateResult, error) {
+	return u.st.State()
+}
+
+// SetState sets the state persisted by the charm running in this unit
+// and the state internal to the uniter for this unit.
+func (u *Unit) SetState(unitState params.SetUnitStateArg) error {
+	return u.st.SetState(unitState)
 }
 
 // CommitHookChanges batches together all required API calls for applying
@@ -873,11 +865,8 @@ func (u *Unit) CommitHookChanges(req params.CommitHookChangesArgs) error {
 	if err != nil {
 		return err
 	}
-
-	if exp, got := len(req.Args), len(results.Results); got != exp {
-		return errors.Errorf("expected result count to be %d; got %d", exp, got)
-	}
-	return results.Combine()
+	// Make sure we correctly decode quota-related errors.
+	return maybeRestoreQuotaLimitError(results.OneError())
 }
 
 // CommitHookParamsBuilder is a helper type for populating the set of
@@ -931,19 +920,19 @@ func (b *CommitHookParamsBuilder) UpdateRelationUnitSettings(relName string, uni
 	})
 }
 
-// UpdateRelationUnitSettings records a request to update the network information
+// UpdateNetworkInfo records a request to update the network information
 // settings for each joined relation.
 func (b *CommitHookParamsBuilder) UpdateNetworkInfo() {
 	b.arg.UpdateNetworkInfo = true
 }
 
-// UpdateUnitState records a request to update the server-persisted charm state.
-func (b *CommitHookParamsBuilder) UpdateUnitState(state map[string]string) {
+// UpdateCharmState records a request to update the server-persisted charm state.
+func (b *CommitHookParamsBuilder) UpdateCharmState(state map[string]string) {
 	b.arg.SetUnitState = &params.SetUnitStateArg{
 		// The Tag is optional as the call uses the Tag from the
 		// CommitHookChangesArg; it is included here for consistency.
-		Tag:   b.arg.Tag,
-		State: state,
+		Tag:        b.arg.Tag,
+		CharmState: &state,
 	}
 }
 
@@ -966,6 +955,14 @@ func (b *CommitHookParamsBuilder) AddStorage(constraints map[string][]params.Sto
 // SetPodSpec records a request to update the PodSpec for an application.
 func (b *CommitHookParamsBuilder) SetPodSpec(appTag names.ApplicationTag, spec *string) {
 	b.arg.SetPodSpec = &params.PodSpec{
+		Tag:  appTag.String(),
+		Spec: spec,
+	}
+}
+
+// SetRawK8sSpec records a request to update the PodSpec for an application.
+func (b *CommitHookParamsBuilder) SetRawK8sSpec(appTag names.ApplicationTag, spec *string) {
+	b.arg.SetRawK8sSpec = &params.PodSpec{
 		Tag:  appTag.String(),
 		Spec: spec,
 	}
@@ -994,10 +991,25 @@ func (b *CommitHookParamsBuilder) changeCount() int {
 	if b.arg.SetPodSpec != nil {
 		count++
 	}
+	if b.arg.SetRawK8sSpec != nil {
+		count++
+	}
 
 	count += len(b.arg.RelationUnitSettings)
 	count += len(b.arg.OpenPorts)
 	count += len(b.arg.ClosePorts)
 	count += len(b.arg.AddStorage)
 	return count
+}
+
+// maybeRestoreQuotaLimitError checks if the server emitted a quota limit
+// exceeded error and restores it back to a typed error from juju/errors.
+// Ideally, we would use apiserver/common.RestoreError but apparently, that
+// package imports worker/uniter/{operation, remotestate} causing an import
+// cycle.
+func maybeRestoreQuotaLimitError(err error) error {
+	if params.IsCodeQuotaLimitExceeded(err) {
+		return errors.NewQuotaLimitExceeded(nil, err.Error())
+	}
+	return err
 }

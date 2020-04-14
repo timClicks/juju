@@ -41,6 +41,10 @@ type Info struct {
 
 	// StorageId is the ID of the storage instance relevant to the hook.
 	StorageId string `yaml:"storage-id,omitempty"`
+
+	// DepartingUnit is the name of the unit that goes away. It is only set
+	// when Kind indicates a relation-departed hook.
+	DepartingUnit string `yaml:"departee,omitempty"`
 }
 
 // Validate returns an error if the info is not valid.
@@ -63,7 +67,7 @@ func (hi Info) Validate() error {
 			return fmt.Errorf("%q hook has a remote unit but no application", hi.Kind)
 		}
 		return nil
-	case hooks.Install, hooks.Remove, hooks.Start, hooks.ConfigChanged, hooks.UpgradeCharm, hooks.Stop, hooks.RelationBroken,
+	case hooks.Install, hooks.Remove, hooks.Start, hooks.ConfigChanged, hooks.UpgradeCharm, hooks.Stop, hooks.RelationCreated, hooks.RelationBroken,
 		hooks.CollectMetrics, hooks.MeterStatusChanged, hooks.UpdateStatus, hooks.PreSeriesUpgrade, hooks.PostSeriesUpgrade:
 		return nil
 	case hooks.Action:

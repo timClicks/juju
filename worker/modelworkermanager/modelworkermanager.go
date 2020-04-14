@@ -15,7 +15,9 @@ import (
 	"gopkg.in/juju/worker.v1"
 	"gopkg.in/juju/worker.v1/catacomb"
 
+	"github.com/juju/juju/apiserver/apiserverhttp"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/pki"
 	"github.com/juju/juju/state"
 )
 
@@ -59,10 +61,12 @@ type ModelLogger interface {
 // NewModelConfig holds the information required by the NewModelWorkerFunc
 // to start the workers for the specified model
 type NewModelConfig struct {
+	Authority        pki.Authority
 	ModelName        string // Use a fully qualified name "<namespace>-<name>"
 	ModelUUID        string
 	ModelType        state.ModelType
 	ModelLogger      ModelLogger
+	Mux              *apiserverhttp.Mux
 	ControllerConfig controller.Config
 }
 
@@ -74,10 +78,12 @@ type NewModelWorkerFunc func(config NewModelConfig) (worker.Worker, error)
 // Config holds the dependencies and configuration necessary to run
 // a model worker manager.
 type Config struct {
+	Authority      pki.Authority
 	Clock          clock.Clock
 	Logger         Logger
 	MachineID      string
 	ModelWatcher   ModelWatcher
+	Mux            *apiserverhttp.Mux
 	Controller     Controller
 	NewModelWorker NewModelWorkerFunc
 	ErrorDelay     time.Duration
@@ -86,6 +92,9 @@ type Config struct {
 // Validate returns an error if config cannot be expected to drive
 // a functional model worker manager.
 func (config Config) Validate() error {
+	if config.Authority == nil {
+		return errors.NotValidf("nil authority")
+	}
 	if config.Clock == nil {
 		return errors.NotValidf("nil Clock")
 	}
@@ -188,9 +197,11 @@ func (m *modelWorkerManager) loop() error {
 			return nil
 		}
 		cfg := NewModelConfig{
+			Authority:        m.config.Authority,
 			ModelName:        fmt.Sprintf("%s-%s", model.Owner().Id(), model.Name()),
 			ModelUUID:        modelUUID,
 			ModelType:        model.Type(),
+			Mux:              m.config.Mux,
 			ControllerConfig: controllerConfig,
 		}
 		return errors.Trace(m.ensure(cfg))

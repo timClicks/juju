@@ -150,11 +150,6 @@ func (s *SourcePrecheckSuite) TestProvisioningMachine(c *gc.C) {
 	c.Assert(err.Error(), gc.Equals, "machine 0 not running (allocating)")
 }
 
-func (s *SourcePrecheckSuite) TestDownMachineAgentLegacy(c *gc.C) {
-	err := migration.SourcePrecheck(newBackendWithDownMachineAgent(), nil, nil)
-	c.Assert(err.Error(), gc.Equals, "machine 1 agent not functioning at this time (down)")
-}
-
 func (s *SourcePrecheckSuite) TestDownMachineAgent(c *gc.C) {
 	backend := newHappyBackend()
 	modelPresence := downAgentPresence("machine-1")
@@ -268,21 +263,6 @@ func (s *SourcePrecheckSuite) TestUnitNotIdle(c *gc.C) {
 	}
 	err := sourcePrecheck(backend)
 	c.Assert(err.Error(), gc.Equals, "unit foo/0 not idle or executing (failed)")
-}
-
-func (s *SourcePrecheckSuite) TestUnitLostLegacy(c *gc.C) {
-	backend := &fakeBackend{
-		apps: []migration.PrecheckApplication{
-			&fakeApp{
-				name: "foo",
-				units: []migration.PrecheckUnit{
-					&fakeUnit{name: "foo/0", lost: true},
-				},
-			},
-		},
-	}
-	err := migration.SourcePrecheck(backend, nil, nil)
-	c.Assert(err.Error(), gc.Equals, "unit foo/0 not idle or executing (lost)")
 }
 
 func (s *SourcePrecheckSuite) TestUnitLost(c *gc.C) {
@@ -575,12 +555,6 @@ func (s *TargetPrecheckSuite) TestProvisioningMachine(c *gc.C) {
 	c.Assert(err.Error(), gc.Equals, "machine 0 not running (allocating)")
 }
 
-func (s *TargetPrecheckSuite) TestDownMachineAgentLegacy(c *gc.C) {
-	backend := newBackendWithDownMachineAgent()
-	err := migration.TargetPrecheck(backend, nil, s.modelInfo, nil)
-	c.Assert(err.Error(), gc.Equals, "machine 1 agent not functioning at this time (down)")
-}
-
 func (s *TargetPrecheckSuite) TestDownMachineAgent(c *gc.C) {
 	backend := newHappyBackend()
 	modelPresence := downAgentPresence("machine-1")
@@ -739,15 +713,6 @@ func newBackendWithProvisioningMachine() *fakeBackend {
 	}
 }
 
-func newBackendWithDownMachineAgent() *fakeBackend {
-	return &fakeBackend{
-		machines: []migration.PrecheckMachine{
-			&fakeMachine{id: "0"},
-			&fakeMachine{id: "1", lost: true},
-		},
-	}
-}
-
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		controllerBackend: &fakeBackend{},
@@ -893,7 +858,7 @@ func (m *fakeModel) MigrationMode() state.MigrationMode {
 	return m.migrationMode
 }
 
-func (m *fakeModel) CloudCredential() (names.CloudCredentialTag, bool) {
+func (m *fakeModel) CloudCredentialTag() (names.CloudCredentialTag, bool) {
 	if names.IsValidCloudCredential(m.credential) {
 		return names.NewCloudCredentialTag(m.credential), true
 	}
@@ -906,7 +871,6 @@ type fakeMachine struct {
 	life           state.Life
 	status         status.Status
 	instanceStatus status.Status
-	lost           bool
 	rebootAction   state.RebootAction
 }
 
@@ -934,10 +898,6 @@ func (m *fakeMachine) InstanceStatus() (status.StatusInfo, error) {
 		s = status.Running
 	}
 	return status.StatusInfo{Status: s}, nil
-}
-
-func (m *fakeMachine) AgentPresence() (bool, error) {
-	return !m.lost, nil
 }
 
 func (m *fakeMachine) AgentTools() (*tools.Tools, error) {
@@ -998,7 +958,6 @@ type fakeUnit struct {
 	life        state.Life
 	charmURL    string
 	agentStatus status.Status
-	lost        bool
 }
 
 func (u *fakeUnit) Name() string {
@@ -1047,10 +1006,6 @@ func (u *fakeUnit) AgentStatus() (status.StatusInfo, error) {
 
 func (u *fakeUnit) Status() (status.StatusInfo, error) {
 	return status.StatusInfo{Status: status.Idle}, nil
-}
-
-func (u *fakeUnit) AgentPresence() (bool, error) {
-	return !u.lost, nil
 }
 
 type fakeRelation struct {

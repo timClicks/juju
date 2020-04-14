@@ -54,11 +54,11 @@
   name = "github.com/hashicorp/raft-boltdb"
 
 [[constraint]]
-  revision = "4ca814a87a328d089e9e610538fc205d7bed3987"
+  revision = "0854974e644486efb72b4c6eb164861c089c581a"
   name = "github.com/juju/bundlechanges"
 
 [[constraint]]
-  revision = "d884fa94b91060a8995d85aca929f96fd100e935"
+  revision = "cb183d728f9d6dc45b78ad38cbbf39e06144f9b6"
   name = "github.com/juju/description"
 
 [[constraint]]
@@ -86,7 +86,7 @@
   name = "github.com/juju/naturalsort"
 
 [[constraint]]
-  revision = "a3d14ebcfc135bea4a3e437176f2ddb50c6ffad4"
+  revision = "8e16ce76f45e33b393e89c6062639e431e6260ed"
   name = "github.com/juju/os"
 
 [[constraint]]
@@ -123,7 +123,7 @@
 
 [[constraint]]
   name = "github.com/lxc/lxd"
-  revision = "3a5f63bc49591c4cb62268f210b07ff8e74b727d"
+  revision = "582edb00c72c6bedfa55c2191bbd395512cb0823"
 
 [[constraint]]
   name = "github.com/oracle/oci-go-sdk"
@@ -143,7 +143,7 @@
 
 [[constraint]]
   name = "gopkg.in/juju/charm.v6"
-  revision = "5217f4ff9d6d681861601ad653e151ffb2f05b90"
+  revision = "c390a4cc19a3efac72d6fcce80ab2984d54f1f3f"
 
 [[constraint]]
   revision = "4a4d9c6d92fd547ab98053fde7874b3c51e4f0f1"
@@ -154,7 +154,7 @@
   name = "gopkg.in/juju/environschema.v1"
 
 [[constraint]]
-  revision = "139ecaca454cb9101eed8ea76374ddc0be8cc8e8"
+  revision = "2c9a102df21118f159a298d9419997bbe2ddab58"
   name = "gopkg.in/juju/names.v3"
 
 [[constraint]]
@@ -191,11 +191,7 @@
 
 [[constraint]]
   name = "github.com/Azure/azure-sdk-for-go"
-  revision = "9699bdefa481d47c5c7638a1cc05d87ce53601fd"
-
-[[override]]
-  name = "github.com/Azure/go-autorest"
-  revision = "528b76fd0ebec0682f3e3da7c808cd472b999615"
+  revision = "090dc0ee4d8d2d60e2a9525774d967a4111a2b0c"
 
 [[override]]
   name = "github.com/ajstarks/svgo"
@@ -296,7 +292,7 @@
 
 [[constraint]]
   name = "github.com/juju/errors"
-  revision = "22422dad46e14561a0854ad42497a75af9b61909"
+  revision = "3fe23663418fc1d724868c84f21b7519bbac7441"
 
 [[constraint]]
   name = "github.com/juju/go-oracle-cloud"
@@ -332,7 +328,7 @@
 
 [[constraint]]
   name = "github.com/juju/terms-client"
-  revision = "d29f8efe0af6f5ed0e8d5bff8bccbecb16e653d1"
+  revision = "fab45ea044ae143a8ebb93e965de1341466bdac2"
 
 [[constraint]]
   revision = "5f348e78887d8757a402c7bb81e707c3b244c6da"
@@ -444,7 +440,7 @@
 
 [[constraint]]
   name = "golang.org/x/crypto"
-  revision = "f027049dab0ad238e394a753dba2d14753473a04"
+  revision = "69ecbb4d6d5dab05e49161c6e77ea40a030884e1"
 
 [[constraint]]
   name = "golang.org/x/net"
@@ -456,7 +452,7 @@
 
 [[constraint]]
   name = "golang.org/x/sys"
-  revision = "0cf1ed9e522b7dbb416f080a5c8003de9b702bf4"
+  revision = "915c9c3d4ccf72b2ceac5e8303d722b16b699366"
 
 [[override]]
   name = "golang.org/x/text"
@@ -472,7 +468,7 @@
 
 [[constraint]]
   name = "gopkg.in/goose.v2"
-  revision = "cc624cc0ae77ab888b42b3084ad915c9e5e12bbc"
+  revision = "0c829f62c42a124f510394e506a967c9d11d9b52"
 
 [[override]]
   name = "gopkg.in/httprequest.v1"
@@ -493,7 +489,8 @@
 
 [[constraint]]
   name = "gopkg.in/natefinch/lumberjack.v2"
-  revision = "df99d62fd42d8b3752c8a42c6723555372c02a03"
+  revision = "e80968ade4d7ef955830d81a62a07eaf4d7d0b40"
+  source = "github.com/juju/lumberjack"
 
 [[constraint]]
   name = "gopkg.in/tomb.v2"
@@ -515,3 +512,7 @@
 [[constraint]]
   name = "github.com/aws/aws-sdk-go"
   version = "1.29.7"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/kballard/go-shellquote"

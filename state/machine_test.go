@@ -16,7 +16,6 @@ import (
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
 	"gopkg.in/juju/names.v3"
-	"gopkg.in/juju/worker.v1"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
@@ -580,24 +579,6 @@ func (s *MachineSuite) TestRemoveAbort(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 }
 
-func (s *MachineSuite) TestMachineSetAgentPresence(c *gc.C) {
-	alive, err := s.machine.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
-
-	pinger, err := s.machine.SetAgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(pinger, gc.NotNil)
-	defer func() {
-		c.Assert(worker.Stop(pinger), jc.ErrorIsNil)
-	}()
-
-	s.State.StartSync()
-	alive, err = s.machine.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsTrue)
-}
-
 func (s *MachineSuite) TestTag(c *gc.C) {
 	tag := s.machine.MachineTag()
 	c.Assert(tag.Kind(), gc.Equals, names.MachineTagKind)
@@ -707,35 +688,6 @@ func (s *MachineSuite) TestSetPassword(c *gc.C) {
 	})
 }
 
-func (s *MachineSuite) TestMachineWaitAgentPresence(c *gc.C) {
-	alive, err := s.machine.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
-
-	s.State.StartSync()
-	err = s.machine.WaitAgentPresence(coretesting.ShortWait)
-	c.Assert(err, gc.ErrorMatches, `waiting for agent of machine 1: still not alive after timeout`)
-
-	pinger, err := s.machine.SetAgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-
-	s.State.StartSync()
-	err = s.machine.WaitAgentPresence(coretesting.LongWait)
-	c.Assert(err, jc.ErrorIsNil)
-
-	alive, err = s.machine.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsTrue)
-
-	err = pinger.KillForTesting()
-	c.Assert(err, jc.ErrorIsNil)
-
-	s.State.StartSync()
-	alive, err = s.machine.AgentPresence()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(alive, jc.IsFalse)
-}
-
 func (s *MachineSuite) TestMachineInstanceIdCorrupt(c *gc.C) {
 	machine, err := s.State.AddMachine("quantal", state.JobHostUnits)
 	c.Assert(err, jc.ErrorIsNil)
@@ -783,6 +735,12 @@ func (s *MachineSuite) TestMachineSetProvisionedStoresAndInstanceNamesReturnsDis
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(string(iid), gc.Equals, "umbrella/0")
 	c.Assert(iname, gc.Equals, "snowflake")
+
+	all, err := s.Model.AllInstanceData()
+	c.Assert(err, jc.ErrorIsNil)
+	iid, iname = all.InstanceNames(s.machine.Id())
+	c.Assert(string(iid), gc.Equals, "umbrella/0")
+	c.Assert(iname, gc.Equals, "snowflake")
 }
 
 func (s *MachineSuite) TestMachineInstanceNamesReturnsIsNotProvisionedWhenNotProvisioned(c *gc.C) {
@@ -814,6 +772,30 @@ func (s *MachineSuite) TestMachineSetProvisionedUpdatesCharacteristics(c *gc.C) 
 	md, err = s.machine.HardwareCharacteristics()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(*md, gc.DeepEquals, *expected)
+
+	all, err := s.Model.AllInstanceData()
+	c.Assert(err, jc.ErrorIsNil)
+	md = all.HardwareCharacteristics(s.machine.Id())
+	c.Assert(*md, gc.DeepEquals, *expected)
+}
+
+func (s *MachineSuite) TestMachineCharmProfiles(c *gc.C) {
+	hwc := &instance.HardwareCharacteristics{}
+	err := s.machine.SetProvisioned("umbrella/0", "", "fake_nonce", hwc)
+	c.Assert(err, jc.ErrorIsNil)
+
+	profiles := []string{"secure", "magic"}
+	err = s.machine.SetCharmProfiles(profiles)
+	c.Assert(err, jc.ErrorIsNil)
+
+	saved, err := s.machine.CharmProfiles()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(saved, jc.SameContents, profiles)
+
+	all, err := s.Model.AllInstanceData()
+	c.Assert(err, jc.ErrorIsNil)
+	saved = all.CharmProfiles(s.machine.Id())
+	c.Assert(saved, jc.SameContents, profiles)
 }
 
 func (s *MachineSuite) TestMachineAvailabilityZone(c *gc.C) {
@@ -1087,6 +1069,26 @@ func (s *MachineSuite) TestMachinePrincipalUnits(c *gc.C) {
 			c.Assert(err, jc.ErrorIsNil)
 		}
 	}
+
+	// Principals must be assigned to a machine before then
+	// enter scope to create subordinates.
+	assignments := []struct {
+		machine      *state.Machine
+		units        []*state.Unit
+		subordinates []*state.Unit
+	}{
+		{m1, []*state.Unit{units[0][0]}, nil},
+		{m2, []*state.Unit{units[0][1], units[1][0], units[1][1], units[2][0]}, nil},
+		{m3, []*state.Unit{units[2][2]}, nil},
+	}
+
+	for _, a := range assignments {
+		for _, u := range a.units {
+			err := u.AssignToMachine(a.machine)
+			c.Assert(err, jc.ErrorIsNil)
+		}
+	}
+
 	// Add the logging units subordinate to the s2 units.
 	eps, err := s.State.InferEndpoints("s2", "s3")
 	c.Assert(err, jc.ErrorIsNil)
@@ -1101,23 +1103,8 @@ func (s *MachineSuite) TestMachinePrincipalUnits(c *gc.C) {
 	units[3], err = s3.AllUnits()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(sortedUnitNames(units[3]), jc.DeepEquals, []string{"s3/0", "s3/1", "s3/2"})
-
-	assignments := []struct {
-		machine      *state.Machine
-		units        []*state.Unit
-		subordinates []*state.Unit
-	}{
-		{m1, []*state.Unit{units[0][0]}, nil},
-		{m2, []*state.Unit{units[0][1], units[1][0], units[1][1], units[2][0]}, []*state.Unit{units[3][0]}},
-		{m3, []*state.Unit{units[2][2]}, []*state.Unit{units[3][2]}},
-	}
-
-	for _, a := range assignments {
-		for _, u := range a.units {
-			err := u.AssignToMachine(a.machine)
-			c.Assert(err, jc.ErrorIsNil)
-		}
-	}
+	assignments[1].subordinates = []*state.Unit{units[3][0]}
+	assignments[2].subordinates = []*state.Unit{units[3][2]}
 
 	for i, a := range assignments {
 		c.Logf("test %d", i)
@@ -1647,6 +1634,11 @@ func (s *MachineSuite) TestSetConstraints(c *gc.C) {
 	mcons, err = machine.Constraints()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(mcons, gc.DeepEquals, cons1)
+
+	all, err := s.Model.AllConstraints()
+	c.Assert(err, jc.ErrorIsNil)
+	cons := all.Machine(machine.Id())
+	c.Assert(cons, gc.DeepEquals, cons1)
 }
 
 func (s *MachineSuite) TestSetAmbiguousConstraints(c *gc.C) {

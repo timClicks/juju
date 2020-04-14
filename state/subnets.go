@@ -101,16 +101,6 @@ func (s *Subnet) EnsureDead() (err error) {
 	return onAbort(txnErr, subnetNotAliveErr)
 }
 
-func (s *Subnet) MoveSubnetOps(toSpaceID string) []txn.Op {
-	ops := []txn.Op{{
-		C:      subnetsC,
-		Id:     s.doc.DocID,
-		Update: bson.D{{"$set", bson.D{{"space-id", toSpaceID}}}},
-		Assert: isAliveDoc,
-	}}
-	return ops
-}
-
 // Remove removes a Dead subnet. If the subnet is not Dead or it is already
 // removed, an error is returned. On success, all IP addresses added to the
 // subnet are also removed.
@@ -182,6 +172,27 @@ func (s *Subnet) SpaceName() string {
 // network.AlphaSpaceId.
 func (s *Subnet) SpaceID() string {
 	return s.spaceID
+}
+
+// UpdateSpaceOps returns operations that will ensure that
+// the subnet is in the input space, provided the space exists.
+func (s *Subnet) UpdateSpaceOps(spaceID string) []txn.Op {
+	if s.spaceID == spaceID {
+		return nil
+	}
+	return []txn.Op{
+		{
+			C:      spacesC,
+			Id:     s.st.docID(spaceID),
+			Assert: txn.DocExists,
+		},
+		{
+			C:      subnetsC,
+			Id:     s.doc.DocID,
+			Update: bson.D{{"$set", bson.D{{"space-id", spaceID}}}},
+			Assert: isAliveDoc,
+		},
+	}
 }
 
 // ProviderNetworkId returns the provider id of the network containing
@@ -311,8 +322,8 @@ func (s *Subnet) updateSpaceName(spaceName string) (bool, error) {
 	return spaceNameChange && spaceName != "" && s.doc.FanLocalUnderlay == "", nil
 }
 
-// networkSubnet maps the subnet fields into a network.SubnetInfo.
-func (s *Subnet) networkSubnet() network.SubnetInfo {
+// NetworkSubnet maps the subnet fields into a network.SubnetInfo.
+func (s *Subnet) NetworkSubnet() network.SubnetInfo {
 	var fanInfo *network.FanCIDRs
 	if s.doc.FanLocalUnderlay != "" || s.doc.FanOverlay != "" {
 		fanInfo = &network.FanCIDRs{
@@ -321,16 +332,45 @@ func (s *Subnet) networkSubnet() network.SubnetInfo {
 		}
 	}
 
-	return network.SubnetInfo{
+	sInfo := network.SubnetInfo{
 		CIDR:              s.doc.CIDR,
 		ProviderId:        network.Id(s.doc.ProviderId),
 		ProviderNetworkId: network.Id(s.doc.ProviderNetworkId),
 		VLANTag:           s.doc.VLANTag,
 		AvailabilityZones: s.doc.AvailabilityZones,
-		// SpaceName and ID will be populated by space.NetworkSpace
-		FanInfo:  fanInfo,
-		IsPublic: s.doc.IsPublic,
+		FanInfo:           fanInfo,
+		IsPublic:          s.doc.IsPublic,
+		SpaceID:           s.doc.SpaceID,
+		// SpaceName and ProviderSpaceID are populated by Space.NetworkSpace().
+		// For now, we do not look them up here.
 	}
+
+	// If this is a fan overlay, it will have a (numeric) space ID of 0.
+	// This is because it inherits the space of its underlay.
+	// In this case we replace it with an empty string so as not to cause
+	// confusion.
+	// Space.NetworkSpace() sets this correctly as expected.
+	// TODO (manadart 2020-04-09): We will probably need to populate this at
+	// some point.
+	if sInfo.FanLocalUnderlay() != "" {
+		sInfo.SpaceID = ""
+	}
+
+	return sInfo
+}
+
+// AllSubnetInfos returns SubnetInfos for all subnets in the model.
+func (st *State) AllSubnetInfos() (network.SubnetInfos, error) {
+	subs, err := st.AllSubnets()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	result := make(network.SubnetInfos, len(subs))
+	for i, sub := range subs {
+		result[i] = sub.NetworkSubnet()
+	}
+	return result, nil
 }
 
 // SubnetUpdate adds new info to the subnet based on provided info.
@@ -457,37 +497,67 @@ func (st *State) uniqueSubnet(cidr, providerID string) (bool, error) {
 	return count == 0, nil
 }
 
-// Subnet returns the subnet specified by the id.
+// Subnet returns the subnet identified by the input ID,
+// or an error if it is not found.
 func (st *State) Subnet(id string) (*Subnet, error) {
-	return st.subnet(bson.M{"subnet-id": id}, id)
+	subnets, err := st.subnets(bson.M{"subnet-id": id})
+	if err != nil {
+		return nil, errors.Annotatef(err, "retrieving subnet with ID %q", id)
+	}
+	if len(subnets) == 0 {
+		return nil, errors.NotFoundf("subnet %q", id)
+	}
+	return subnets[0], nil
 }
 
-// TODO (hml) 2019-08-06
-// This will need to be updated or removed once cidrs
-// are no longer unique identifiers of juju subnets.
-//
-// SubnetByCIDR returns the subnet specified by the CIDR.
+// SubnetByCIDR returns a unique subnet matching the input CIDR.
+// If no unique match is achieved, an error is returned.
+// TODO (manadart 2020-03-11): As of this date, CIDR remains a unique
+// identifier for a subnet due to how we constrain provider networking
+// implementations. When this changes, callers relying on this method to return
+// a unique match will need attention.
+// Usage of this method should probably be phased out.
 func (st *State) SubnetByCIDR(cidr string) (*Subnet, error) {
-	return st.subnet(bson.M{"cidr": cidr}, cidr)
+	subnets, err := st.subnets(bson.M{"cidr": cidr})
+	if err != nil {
+		return nil, errors.Annotatef(err, "retrieving subnet with CIDR %q", cidr)
+	}
+	if len(subnets) == 0 {
+		return nil, errors.NotFoundf("subnet %q", cidr)
+	}
+	if len(subnets) > 1 {
+		return nil, errors.Errorf("multiple subnets matching %q", cidr)
+	}
+	return subnets[0], nil
 }
 
-func (st *State) subnet(exp bson.M, thing string) (*Subnet, error) {
-	subnets, closer := st.db().GetCollection(subnetsC)
+// SubnetsByCIDR returns the subnets matching the input CIDR.
+func (st *State) SubnetsByCIDR(cidr string) ([]*Subnet, error) {
+	subnets, err := st.subnets(bson.M{"cidr": cidr})
+	return subnets, errors.Annotatef(err, "retrieving subnets with CIDR %q", cidr)
+}
+
+func (st *State) subnets(exp bson.M) ([]*Subnet, error) {
+	col, closer := st.db().GetCollection(subnetsC)
 	defer closer()
 
-	var doc subnetDoc
-	err := subnets.Find(exp).One(&doc)
-	if err == mgo.ErrNotFound {
-		return nil, errors.NotFoundf("subnet %q", thing)
-	}
+	var docs []subnetDoc
+	err := col.Find(exp).All(&docs)
 	if err != nil {
-		return nil, errors.Annotatef(err, "cannot get subnet %q", thing)
+		return nil, errors.Trace(err)
 	}
-	subnet := &Subnet{st: st, doc: doc}
-	if err := subnet.setSpace(subnets); err != nil {
-		return nil, err
+	if len(docs) == 0 {
+		return nil, nil
 	}
-	return subnet, nil
+
+	subnets := make([]*Subnet, len(docs))
+	for i, doc := range docs {
+		subnets[i] = &Subnet{st: st, doc: doc}
+		if err := subnets[i].setSpace(col); err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+	return subnets, nil
 }
 
 // AllSubnets returns all known subnets in the model.

@@ -17,10 +17,12 @@ import (
 	"github.com/juju/juju/apiserver/facade"
 	"github.com/juju/juju/apiserver/params"
 	jujucontroller "github.com/juju/juju/controller"
+	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/permission"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/context"
+	"github.com/juju/juju/environs/space"
 	"github.com/juju/juju/state"
 	"gopkg.in/mgo.v2/txn"
 )
@@ -34,14 +36,22 @@ type BlockChecker interface {
 	RemoveAllowed() error
 }
 
+// Address is an indirection for state.Address.
+type Address interface {
+	SubnetCIDR() string
+}
+
 // Machine defines the methods supported by a machine used in the space context.
 type Machine interface {
+	ApplicationNames() ([]string, error)
+	AllAddresses() ([]Address, error)
 	AllSpaces() (set.Strings, error)
 }
 
 // Constraints defines the methods supported by constraints used in the space context.
 type Constraints interface {
 	ID() string
+	Value() constraints.Value
 	ChangeSpaceNameOps(from, to string) []txn.Op
 }
 
@@ -58,8 +68,12 @@ type Backing interface {
 	// ModelTag returns the tag of this model.
 	ModelTag() names.ModelTag
 
-	// SubnetByCIDR returns a subnet based on the input CIDR.
+	// SubnetByCIDR returns a unique subnet based on the input CIDR.
 	SubnetByCIDR(cidr string) (networkingcommon.BackingSubnet, error)
+
+	// MovingSubnet returns the subnet for the input ID,
+	// suitable for moving to a new space.
+	MovingSubnet(id string) (MovingSubnet, error)
 
 	// AddSpace creates a space.
 	AddSpace(Name string, ProviderId network.Id, Subnets []string, Public bool) error
@@ -70,9 +84,6 @@ type Backing interface {
 	// SpaceByName returns the Juju network space given by name.
 	SpaceByName(name string) (networkingcommon.BackingSpace, error)
 
-	// ReloadSpaces loads spaces from backing environ.
-	ReloadSpaces(environ environs.BootstrapEnviron) error
-
 	// AllEndpointBindings loads all endpointBindings.
 	AllEndpointBindings() ([]ApplicationEndpointBindingsShim, error)
 
@@ -82,11 +93,20 @@ type Backing interface {
 	// ApplyOperation applies a given ModelOperation to the model.
 	ApplyOperation(state.ModelOperation) error
 
-	// ControllerConfig Returns the controller config.
+	// ControllerConfig returns the controller config.
 	ControllerConfig() (jujucontroller.Config, error)
 
-	// ConstraintsBySpaceName  Returns constraints found by spaceName.
+	// AllConstraints returns all constraints in the model.
+	AllConstraints() ([]Constraints, error)
+
+	// ConstraintsBySpaceName returns constraints found by spaceName.
 	ConstraintsBySpaceName(name string) ([]Constraints, error)
+
+	// SaveProviderSpaces loads providerSpaces into state.
+	SaveProviderSpaces([]network.SpaceInfo) error
+
+	// SaveProviderSubnets loads subnets into state.
+	SaveProviderSubnets([]network.SubnetInfo, string) error
 
 	// IsController returns true if this state instance has the bootstrap
 	// model UUID.
@@ -167,7 +187,7 @@ func NewAPI(st *state.State, res facade.Resources, auth facade.Authorizer) (*API
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return newAPIWithBacking(stateShim, common.NewBlockChecker(st), state.CallContext(st), res, auth, newOpFactory(st))
+	return newAPIWithBacking(stateShim, common.NewBlockChecker(st), context.CallContext(st), res, auth, newOpFactory(st))
 }
 
 // newAPIWithBacking creates a new server-side Spaces API facade with
@@ -298,8 +318,8 @@ func (api *API) createOneSpace(args params.CreateSpaceParams) error {
 
 func convertOldSubnetTagToCIDR(subnetTags []string) ([]string, error) {
 	cidrs := make([]string, len(subnetTags))
-	// in lieu of keeping names.v2 around, split the expected
-	// string for the older api calls.  Format: subnet-<cidr>
+	// In lieu of keeping names.v2 around, split the expected
+	// string for the older api calls. Format: subnet-<CIDR>
 	for i, tag := range subnetTags {
 		split := strings.Split(tag, "-")
 		if len(split) != 2 || split[0] != "subnet" {
@@ -422,7 +442,7 @@ func (api *API) ShowSpace(entities params.Entities) (params.ShowSpaceResults, er
 // ReloadSpaces is not available via the V2 API.
 func (u *APIv2) ReloadSpaces(_, _ struct{}) {}
 
-// RefreshSpaces refreshes spaces from substrate
+// ReloadSpaces refreshes spaces from substrate
 func (api *API) ReloadSpaces() error {
 	canWrite, err := api.auth.HasPermission(permission.WriteAccess, api.backing.ModelTag())
 	if err != nil && !errors.IsNotFound(err) {
@@ -438,7 +458,7 @@ func (api *API) ReloadSpaces() error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return errors.Trace(api.backing.ReloadSpaces(env))
+	return errors.Trace(space.ReloadSpaces(api.context, api.backing, env))
 }
 
 // checkSupportsSpaces checks if the environment implements NetworkingEnviron
@@ -450,19 +470,6 @@ func (api *API) checkSupportsSpaces() error {
 	}
 	if !environs.SupportsSpaces(api.context, env) {
 		return errors.NotSupportedf("spaces")
-	}
-	return nil
-}
-
-// checkSupportsProviderSpaces checks if the environment implements
-// NetworkingEnviron and also if it supports provider spaces.
-func (api *API) checkSupportsProviderSpaces() error {
-	env, err := environs.GetEnviron(api.backing, environs.New)
-	if err != nil {
-		return errors.Annotate(err, "getting environ")
-	}
-	if environs.SupportsProviderSpaces(api.context, env) {
-		return errors.NotSupportedf("renaming provider-sourced spaces")
 	}
 	return nil
 }
@@ -500,4 +507,49 @@ func (api *API) applicationsBoundToSpace(spaceID string) ([]string, error) {
 		}
 	}
 	return applications.SortedValues(), nil
+}
+
+// ensureSpacesAreMutable checks that the current user
+// is allowed to edit the Space topology.
+func (api *API) ensureSpacesAreMutable() error {
+	isAdmin, err := api.auth.HasPermission(permission.AdminAccess, api.backing.ModelTag())
+	if err != nil && !errors.IsNotFound(err) {
+		return errors.Trace(err)
+	}
+	if !isAdmin {
+		return common.ServerError(common.ErrPerm)
+	}
+	if err := api.check.ChangeAllowed(); err != nil {
+		return errors.Trace(err)
+	}
+	if err = api.ensureSpacesNotProviderSourced(); err != nil {
+		return common.ServerError(errors.Trace(err))
+	}
+	return nil
+}
+
+// ensureSpacesNotProviderSourced checks if the environment implements
+// NetworkingEnviron and also if it supports provider spaces.
+// An error is returned if it is the provider and not the Juju operator
+// that determines the space topology.
+func (api *API) ensureSpacesNotProviderSourced() error {
+	env, err := environs.GetEnviron(api.backing, environs.New)
+	if err != nil {
+		return errors.Annotate(err, "retrieving environ")
+	}
+
+	netEnv, ok := env.(environs.NetworkingEnviron)
+	if !ok {
+		return errors.NotSupportedf("provider networking")
+	}
+
+	providerSourced, err := netEnv.SupportsSpaceDiscovery(api.context)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	if providerSourced {
+		return errors.NotSupportedf("modifying provider-sourced spaces")
+	}
+	return nil
 }

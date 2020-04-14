@@ -27,10 +27,10 @@ import (
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/cloudconfig"
 	"github.com/juju/juju/cloudconfig/cloudinit"
 	"github.com/juju/juju/cloudconfig/instancecfg"
+	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/paths"
@@ -69,6 +69,10 @@ func jujuDataDir(series string) string {
 	return must(paths.DataDir(series))
 }
 
+func jujuTransientDataDir(series string) string {
+	return must(paths.TransientDataDir(series))
+}
+
 func cloudInitOutputLog(logDir string) string {
 	return path.Join(logDir, "cloud-init-output.log")
 }
@@ -85,7 +89,7 @@ func must(s string, err error) string {
 	return s
 }
 
-var stateServingInfo = params.StateServingInfo{
+var stateServingInfo = controller.StateServingInfo{
 	Cert:         string(serverCert),
 	PrivateKey:   string(serverKey),
 	CAPrivateKey: "ca-private-key",
@@ -215,6 +219,7 @@ func (cfg *testInstanceConfig) setSeries(series string, build int) *testInstance
 	}
 	cfg.Series = series
 	cfg.DataDir = jujuDataDir(series)
+	cfg.TransientDataDir = jujuTransientDataDir(series)
 	cfg.LogDir = jujuLogDir(series)
 	cfg.CloudInitOutputLog = cloudInitOutputLog(series)
 	return cfg

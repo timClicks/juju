@@ -5,6 +5,7 @@ package debug
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -21,7 +22,8 @@ import (
 // ServerSession represents a "juju debug-hooks" session.
 type ServerSession struct {
 	*HooksContext
-	hooks set.Strings
+	hooks   set.Strings
+	debugAt string
 
 	output io.Writer
 }
@@ -39,19 +41,26 @@ var waitClientExit = func(s *ServerSession) {
 	exec.Command("flock", path, "-c", "true").Run()
 }
 
-// RunHook "runs" the hook with the specified name via debug-hooks.
-func (s *ServerSession) RunHook(hookName, charmDir string, env []string) error {
+// RunHook "runs" the hook with the specified name via debug-hooks. The hookRunner
+// parameters specifies the name of the binary that users can invoke to handle
+// the hook. When using the legacy hook system, hookRunner will be equal to
+// the hookName; otherwise, it will point to a script that acts as the dispatcher
+// for all hooks/actions.
+func (s *ServerSession) RunHook(hookName, charmDir string, env []string, hookRunner string) error {
 	debugDir, err := ioutil.TempDir("", "juju-debug-hooks-")
 	if err != nil {
 		return errors.Trace(err)
 	}
-	defer os.RemoveAll(debugDir)
-	if err := s.writeDebugFiles(debugDir); err != nil {
+	defer func() { _ = os.RemoveAll(debugDir) }()
+	help := buildRunHookCmd(hookName, hookRunner)
+	if err := s.writeDebugFiles(debugDir, help, hookRunner); err != nil {
 		return errors.Trace(err)
 	}
 
-	env = utils.Setenv(env, "JUJU_HOOK_NAME="+hookName)
 	env = utils.Setenv(env, "JUJU_DEBUG="+debugDir)
+	if s.debugAt != "" {
+		env = utils.Setenv(env, "JUJU_DEBUG_AT="+s.debugAt)
+	}
 
 	cmd := exec.Command("/bin/bash", "-s")
 	cmd.Env = env
@@ -69,19 +78,26 @@ func (s *ServerSession) RunHook(hookName, charmDir string, env []string) error {
 		// then kill the server hook process in case the client
 		// exited uncleanly.
 		waitClientExit(s)
-		proc.Kill()
+		_ = proc.Kill()
 	}(cmd.Process)
 	return cmd.Wait()
 }
 
-func (s *ServerSession) writeDebugFiles(debugDir string) error {
+func buildRunHookCmd(hookName, hookRunner string) string {
+	if hookName == filepath.Base(hookRunner) {
+		return "./$JUJU_DISPATCH_PATH"
+	}
+	return "./" + hookRunner
+}
+
+func (s *ServerSession) writeDebugFiles(debugDir, help, hookRunner string) error {
 	// hook.sh does not inherit environment variables,
 	// so we must insert the path to the directory
 	// containing env.sh for it to source.
-	debugHooksHookScript := strings.Replace(
+	debugHooksHookScript := strings.Replace(strings.Replace(
 		debugHooksHookScript,
 		"__JUJU_DEBUG__", debugDir, -1,
-	)
+	), "__JUJU_HOOK_RUNNER__", hookRunner, -1)
 
 	type file struct {
 		filename string
@@ -89,7 +105,7 @@ func (s *ServerSession) writeDebugFiles(debugDir string) error {
 		mode     os.FileMode
 	}
 	files := []file{
-		{"welcome.msg", debugHooksWelcomeMessage, 0644},
+		{"welcome.msg", fmt.Sprintf(debugHooksWelcomeMessage, help), 0644},
 		{"init.sh", debugHooksInitScript, 0755},
 		{"hook.sh", debugHooksHookScript, 0755},
 	}
@@ -128,7 +144,7 @@ func (c *HooksContext) FindSession() (*ServerSession, error) {
 		return nil, err
 	}
 	hooks := set.NewStrings(args.Hooks...)
-	session := &ServerSession{HooksContext: c, hooks: hooks}
+	session := &ServerSession{HooksContext: c, hooks: hooks, debugAt: args.DebugAt}
 	return session, nil
 }
 
@@ -136,13 +152,18 @@ const debugHooksServerScript = `set -e
 exec > $JUJU_DEBUG/debug.log >&1
 
 # Set a useful prompt.
-export PS1="$JUJU_UNIT_NAME:$JUJU_HOOK_NAME % "
+export PS1="$JUJU_UNIT_NAME:$JUJU_DISPATCH_PATH % "
 
 # Save environment variables and export them for sourcing.
 FILTER='^\(LS_COLORS\|LESSOPEN\|LESSCLOSE\|PWD\)='
 export | grep -v $FILTER > $JUJU_DEBUG/env.sh
 
-tmux new-window -t $JUJU_UNIT_NAME -n $JUJU_HOOK_NAME "$JUJU_DEBUG/hook.sh"
+if [ -z "$JUJU_HOOK_NAME" ] ; then
+  window_name="$JUJU_DISPATCH_PATH"
+else
+  window_name="$JUJU_HOOK_NAME"
+fi
+tmux new-window -t $JUJU_UNIT_NAME -n $window_name "$JUJU_DEBUG/hook.sh"
 
 # If we exit for whatever reason, kill the hook shell.
 exit_handler() {
@@ -170,7 +191,7 @@ const debugHooksWelcomeMessage = `This is a Juju debug-hooks tmux session. Remem
 new events for this unit without exiting a current debug-session.
 3. To run an action or hook and end the debugging session avoiding processing any more events manually, use:
 
-./hooks/$JUJU_HOOK_NAME # or, equivalently, ./actions/$JUJU_HOOK_NAME
+%s
 tmux kill-session -t $JUJU_UNIT_NAME # or, equivalently, CTRL+a d
 
 4. CTRL+a is tmux prefix.
@@ -185,8 +206,20 @@ envsubst < $JUJU_DEBUG/welcome.msg
 trap 'echo $? > $JUJU_DEBUG/hook_exit_status' EXIT
 `
 
+// debugHooksHookScript is the shell script that tmux spawns instead of running the normal hook.
+// In a debug session, we bring in the environment and record our scripts PID as the
+// hook.pid that the rest of the server is waiting for. Without BREAKPOINT, we then exec an
+// interactive shell with an init.sh that displays a welcome message and traps its exit code into
+// hook_exit_status.
+// With JUJU_DEBUG_AT, we just exec the hook directly, and record its exit status before exit.
+// It is the responsibility of the code handling JUJU_DEBUG_AT to handle prompting.
 const debugHooksHookScript = `#!/bin/bash
 . __JUJU_DEBUG__/env.sh
 echo $$ > $JUJU_DEBUG/hook.pid
-exec /bin/bash --noprofile --init-file $JUJU_DEBUG/init.sh
+if [ -z "$JUJU_DEBUG_AT" ] ; then
+	exec /bin/bash --noprofile --init-file $JUJU_DEBUG/init.sh
+else
+	__JUJU_HOOK_RUNNER__
+	echo $? > $JUJU_DEBUG/hook_exit_status
+fi
 `

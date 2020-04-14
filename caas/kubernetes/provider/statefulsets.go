@@ -32,40 +32,27 @@ func (k *kubernetesClient) configureStatefulSet(
 		return applicationConfigMapName(deploymentName, fileSetName)
 	}
 
-	existingStatefulSet, err := k.getStatefulSet(deploymentName)
-	if err != nil && !errors.IsNotFound(err) {
+	storageUniqueID, err := k.getStorageUniqPrefix(func() (annotationGetter, error) {
+		return k.getStatefulSet(deploymentName)
+	})
+	if err != nil {
 		return errors.Trace(err)
 	}
-	existing := err == nil
 
-	var randPrefix string
-	// Include a random snippet in the pvc name so that if the same app
-	// is deleted and redeployed again, the pvc retains a unique name.
-	// Only generate it once, and record it on the stateful set.
-	if existing {
-		randPrefix = existingStatefulSet.Annotations[labelApplicationUUID]
-	}
-	if randPrefix == "" {
-		randPrefix, err = k.randomPrefix()
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-
-	statefulset := &apps.StatefulSet{
+	statefulSet := &apps.StatefulSet{
 		ObjectMeta: v1.ObjectMeta{
 			Name:   deploymentName,
 			Labels: k.getStatefulSetLabels(appName),
 			Annotations: k8sannotations.New(nil).
 				Merge(annotations).
-				Add(labelApplicationUUID, randPrefix).ToMap(),
+				Add(annotationKeyApplicationUUID, storageUniqueID).ToMap(),
 		},
 		Spec: apps.StatefulSetSpec{
 			Replicas: replicas,
 			Selector: &v1.LabelSelector{
 				MatchLabels: map[string]string{labelApplication: appName},
 			},
-			RevisionHistoryLimit: int32Ptr(StatefulsetRevisionHistoryLimit),
+			RevisionHistoryLimit: int32Ptr(statefulSetRevisionHistoryLimit),
 			Template: core.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					Labels:      k.getStatefulSetLabels(appName),
@@ -82,22 +69,36 @@ func (k *kubernetesClient) configureStatefulSet(
 	podSpec := workloadSpec.Pod
 	existingPodSpec := podSpec
 
-	// Create a new stateful set with the necessary storage config.
-	legacy := isLegacyName(deploymentName)
-	if err := k.configureStorage(&podSpec, &statefulset.Spec, appName, randPrefix, legacy, filesystems); err != nil {
-		return errors.Annotatef(err, "configuring storage for %s", appName)
+	handlePVC := func(pvc core.PersistentVolumeClaim, mountPath string, readOnly bool) error {
+		if readOnly {
+			logger.Warningf("set storage mode to ReadOnlyMany if read only storage is needed")
+		}
+		if err := pushUniqueVolumeClaimTemplate(&statefulSet.Spec, pvc); err != nil {
+			return errors.Trace(err)
+		}
+		podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, core.VolumeMount{
+			Name:      pvc.Name,
+			MountPath: mountPath,
+		})
+		return nil
 	}
-	statefulset.Spec.Template.Spec = podSpec
-	return k.ensureStatefulSet(statefulset, existingPodSpec)
+	if err = k.configureStorage(appName, isLegacyName(deploymentName), storageUniqueID, filesystems, &podSpec, handlePVC); err != nil {
+		return errors.Trace(err)
+	}
+	statefulSet.Spec.Template.Spec = podSpec
+	return k.ensureStatefulSet(statefulSet, existingPodSpec)
 }
 
 func (k *kubernetesClient) ensureStatefulSet(spec *apps.StatefulSet, existingPodSpec core.PodSpec) error {
 	_, err := k.createStatefulSet(spec)
 	if errors.IsNotValid(err) {
 		return errors.Annotatef(err, "ensuring stateful set %q", spec.GetName())
-	}
-	if err != nil && !errors.IsAlreadyExists(err) {
+	} else if errors.IsAlreadyExists(err) {
+		// continue
+	} else if err != nil {
 		return errors.Trace(err)
+	} else {
+		return nil
 	}
 	// The statefulset already exists so all we are allowed to update is replicas,
 	// template, update strategy. Juju may hand out info with a slightly different
@@ -106,8 +107,8 @@ func (k *kubernetesClient) ensureStatefulSet(spec *apps.StatefulSet, existingPod
 	if err != nil {
 		return errors.Trace(err)
 	}
-	// TODO(caas) - allow extra storage to be added
 	existing.Spec.Replicas = spec.Spec.Replicas
+	// TODO(caas) - allow storage `request` configurable - currently we only allow `limit`.
 	existing.Spec.Template.Spec.Containers = existingPodSpec.Containers
 	existing.Spec.Template.Spec.ServiceAccountName = existingPodSpec.ServiceAccountName
 	existing.Spec.Template.Spec.AutomountServiceAccountToken = existingPodSpec.AutomountServiceAccountToken

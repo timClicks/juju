@@ -11,20 +11,19 @@ import (
 	"github.com/juju/cmd/cmdtesting"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
-	"github.com/juju/utils/featureflag"
 	gc "gopkg.in/check.v1"
+	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/cmd/juju/space"
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/network"
-	"github.com/juju/juju/feature"
 	"github.com/juju/juju/jujuclient/jujuclienttesting"
 	coretesting "github.com/juju/juju/testing"
 )
 
-//go:generate mockgen -package mocks -destination mocks/spacesapi_mock.go github.com/juju/juju/cmd/juju/space SpaceAPI
+//go:generate mockgen -package mocks -destination mocks/spacesapi_mock.go github.com/juju/juju/cmd/juju/space SpaceAPI,SubnetAPI,API
 
 func TestPackage(t *stdtesting.T) {
 	gc.TestingT(t)
@@ -52,15 +51,8 @@ func (s *BaseSpaceSuite) TearDownSuite(c *gc.C) {
 }
 
 func (s *BaseSpaceSuite) SetUpTest(c *gc.C) {
-	// If any post-MVP command suite enabled the flag, keep it.
-	hasFeatureFlag := featureflag.Enabled(feature.PostNetCLIMVP)
-
 	s.BaseSuite.SetUpTest(c)
 	s.FakeJujuXDGDataHomeSuite.SetUpTest(c)
-
-	if hasFeatureFlag {
-		s.BaseSuite.SetFeatureFlags(feature.PostNetCLIMVP)
-	}
 
 	s.api = NewStubAPI()
 	c.Assert(s.api, gc.NotNil)
@@ -97,7 +89,7 @@ func (s *BaseSpaceSuite) newCommandForTest() modelcmd.ModelCommand {
 	// out to make sure.
 	cmd.SetClientStore(jujuclienttesting.MinimalStore())
 	cmd1 := modelcmd.InnerCommand(cmd).(interface {
-		SetAPI(space.SpaceAPI)
+		SetAPI(space.API)
 	})
 	cmd1.SetAPI(s.api)
 	return cmd
@@ -157,9 +149,13 @@ type StubAPI struct {
 
 	Spaces  []params.Space
 	Subnets []params.Subnet
+
+	ShowSpaceResp     params.ShowSpaceResult
+	MoveSubnetsResp   params.MoveSubnetsResult
+	SubnetsByCIDRResp []params.SubnetsResult
 }
 
-var _ space.SpaceAPI = (*StubAPI)(nil)
+var _ space.API = (*StubAPI)(nil)
 
 // NewStubAPI creates a StubAPI suitable for passing to
 // space.New*Command().
@@ -205,10 +201,41 @@ func NewStubAPI() *StubAPI {
 		Name:    "space2",
 		Subnets: append([]params.Subnet{}, subnets[2:]...),
 	}}
+	showSpace := params.ShowSpaceResult{
+		Space: params.Space{
+			Id:   spaces[1].Id,
+			Name: spaces[1].Name,
+			Subnets: []params.Subnet{{
+				CIDR: subnets[0].CIDR,
+			}, {
+				CIDR: subnets[2].CIDR,
+			}},
+		},
+	}
+	moveSubnets := params.MoveSubnetsResult{
+		MovedSubnets: []params.MovedSubnet{{
+			SubnetTag:   "1",
+			OldSpaceTag: "space-internal",
+			CIDR:        subnets[0].CIDR,
+		}},
+		NewSpaceTag: "space-public",
+	}
+	subnetsByCIDR := []params.SubnetsResult{{
+		Subnets: []params.SubnetV2{{
+			ID:     "1",
+			Subnet: subnets[0],
+		}, {
+			ID:     "2",
+			Subnet: subnets[2],
+		}},
+	}}
 	return &StubAPI{
-		Stub:    &testing.Stub{},
-		Spaces:  spaces,
-		Subnets: subnets,
+		Stub:              &testing.Stub{},
+		Spaces:            spaces,
+		Subnets:           subnets,
+		ShowSpaceResp:     showSpace,
+		MoveSubnetsResp:   moveSubnets,
+		SubnetsByCIDRResp: subnetsByCIDR,
 	}
 }
 
@@ -230,14 +257,9 @@ func (sa *StubAPI) AddSpace(name string, subnetIds []string, public bool) error 
 	return sa.NextErr()
 }
 
-func (sa *StubAPI) RemoveSpace(name string, force bool, dryRun bool) (network.RemoveSpace, error) {
+func (sa *StubAPI) RemoveSpace(name string, force bool, dryRun bool) (params.RemoveSpaceResult, error) {
 	sa.MethodCall(sa, "RemoveSpace", name)
-	return network.RemoveSpace{}, sa.NextErr()
-}
-
-func (sa *StubAPI) UpdateSpace(name string, subnetIds []string) error {
-	sa.MethodCall(sa, "UpdateSpace", name, subnetIds)
-	return sa.NextErr()
+	return params.RemoveSpaceResult{}, sa.NextErr()
 }
 
 func (sa *StubAPI) RenameSpace(name, newName string) error {
@@ -250,10 +272,20 @@ func (sa *StubAPI) ReloadSpaces() error {
 	return sa.NextErr()
 }
 
-func (sa *StubAPI) ShowSpace(name string) (network.ShowSpace, error) {
+func (sa *StubAPI) ShowSpace(name string) (params.ShowSpaceResult, error) {
 	sa.MethodCall(sa, "ShowSpace", name)
 	if err := sa.NextErr(); err != nil {
-		return network.ShowSpace{}, err
+		return params.ShowSpaceResult{}, err
 	}
-	return network.ShowSpace{}, nil
+	return sa.ShowSpaceResp, nil
+}
+
+func (sa *StubAPI) MoveSubnets(name names.SpaceTag, tags []names.SubnetTag, force bool) (params.MoveSubnetsResult, error) {
+	sa.MethodCall(sa, "MoveSubnets", name, tags, force)
+	return sa.MoveSubnetsResp, sa.NextErr()
+}
+
+func (sa *StubAPI) SubnetsByCIDR(cidrs []string) ([]params.SubnetsResult, error) {
+	sa.MethodCall(sa, "SubnetsByCIDR", cidrs)
+	return sa.SubnetsByCIDRResp, sa.NextErr()
 }

@@ -53,31 +53,6 @@ func (api *API) AddSubnet(cidr string, providerId network.Id, space names.SpaceT
 	return response.OneError()
 }
 
-// CreateSubnet creates a new subnet with the provider.
-func (api *API) CreateSubnet(subnet names.SubnetTag, space names.SpaceTag, zones []string, isPublic bool) error {
-	// TODO (hml) 2019-08-23
-	// This call is behind a feature flag and panics due to lack of
-	// facade on the the other end.  It's in the list to be audited
-	// for updates as part of current networking improvements.  Fix
-	// names.v2 SubnetTag at that time.
-	return errors.NewNotImplemented(nil, "CreateSubnet")
-
-	//var response params.ErrorResults
-	//params := params.CreateSubnetsParams{
-	//	Subnets: []params.CreateSubnetParams{{
-	//		SubnetTag: subnet.String(),
-	//		SpaceTag:  space.String(),
-	//		Zones:     zones,
-	//		IsPublic:  isPublic,
-	//	}},
-	//}
-	//err := api.facade.FacadeCall("CreateSubnets", params, &response)
-	//if err != nil {
-	//	return errors.Trace(err)
-	//}
-	//return response.OneError()
-}
-
 // ListSubnets fetches all the subnets known by the model.
 func (api *API) ListSubnets(spaceTag *names.SpaceTag, zone string) ([]params.Subnet, error) {
 	var response params.ListSubnetsResults
@@ -94,6 +69,28 @@ func (api *API) ListSubnets(spaceTag *names.SpaceTag, zone string) ([]params.Sub
 		return nil, errors.Trace(err)
 	}
 	return response.Results, nil
+}
+
+// SubnetsByCIDR returns the collection of subnets matching each CIDR in the
+// input.
+func (api *API) SubnetsByCIDR(cidrs []string) ([]params.SubnetsResult, error) {
+	args := params.CIDRParams{CIDRS: cidrs}
+
+	var result params.SubnetsResults
+	if err := api.facade.FacadeCall("SubnetsByCIDR", args, &result); err != nil {
+		if params.IsCodeNotSupported(err) {
+			return nil, errors.NewNotSupported(nil, err.Error())
+		}
+		return nil, errors.Trace(err)
+	}
+
+	for _, result := range result.Results {
+		if result.Error != nil {
+			return nil, errors.Trace(result.Error)
+		}
+	}
+
+	return result.Results, nil
 }
 
 func makeAddSubnetsParamsV2(cidr string, providerId network.Id, space names.SpaceTag, zones []string) params.AddSubnetsParamsV2 {

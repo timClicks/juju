@@ -13,6 +13,7 @@ import (
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/facade"
 	"github.com/juju/juju/apiserver/facades/agent/agent"
+	"github.com/juju/juju/apiserver/facades/agent/caasadmission"
 	"github.com/juju/juju/apiserver/facades/agent/caasagent"
 	"github.com/juju/juju/apiserver/facades/agent/caasoperator"
 	"github.com/juju/juju/apiserver/facades/agent/credentialvalidator"
@@ -181,6 +182,7 @@ func AllFacades() *facade.Registry {
 	// Move these to the correct place above once the feature flag disappears.
 	reg("CAASFirewaller", 1, caasfirewaller.NewStateFacade)
 	reg("CAASOperator", 1, caasoperator.NewStateFacade)
+	reg("CAASAdmission", 1, caasadmission.NewStateFacade)
 	reg("CAASAgent", 1, caasagent.NewStateFacade)
 	reg("CAASOperatorProvisioner", 1, caasoperatorprovisioner.NewStateCAASOperatorProvisionerAPI)
 	reg("CAASOperatorUpgrader", 1, caasoperatorupgrader.NewStateCAASOperatorUpgraderAPI)
@@ -220,6 +222,7 @@ func AllFacades() *facade.Registry {
 	reg("InstanceMutater", 1, instancemutater.NewFacadeV1)
 	reg("InstanceMutater", 2, instancemutater.NewFacadeV2)
 
+	reg("InstancePoller", 3, instancepoller.NewFacadeV3)
 	reg("InstancePoller", 4, instancepoller.NewFacade)
 	reg("KeyManager", 1, keymanager.NewKeyManagerAPI)
 	reg("KeyUpdater", 1, keyupdater.NewKeyUpdaterAPI)
@@ -238,9 +241,11 @@ func AllFacades() *facade.Registry {
 	reg("MachineManager", 6, machinemanager.NewFacadeV6) // DestroyMachinesWithParams gains maxWait.
 
 	reg("MachineUndertaker", 1, machineundertaker.NewFacade)
+	reg("Machiner", 1, machine.NewMachinerAPIV1)
 	reg("Machiner", 2, machine.NewMachinerAPI)
 
-	reg("MeterStatus", 1, meterstatus.NewMeterStatusFacade)
+	reg("MeterStatus", 1, meterstatus.NewMeterStatusFacadeV1)
+	reg("MeterStatus", 2, meterstatus.NewMeterStatusFacade)
 	reg("MetricsAdder", 2, metricsadder.NewMetricsAdderAPI)
 	reg("MetricsDebug", 2, metricsdebug.NewMetricsDebugAPI)
 	reg("MetricsManager", 1, metricsmanager.NewFacade)
@@ -315,7 +320,8 @@ func AllFacades() *facade.Registry {
 	reg("StorageProvisioner", 3, storageprovisioner.NewFacadeV3)
 	reg("StorageProvisioner", 4, storageprovisioner.NewFacadeV4)
 	reg("Subnets", 2, subnets.NewAPIv2)
-	reg("Subnets", 3, subnets.NewAPI)
+	reg("Subnets", 3, subnets.NewAPIv3)
+	reg("Subnets", 4, subnets.NewAPI) // Adds SubnetsByCIDR; removes AllSpaces.
 	reg("Undertaker", 1, undertaker.NewUndertakerAPI)
 	reg("UnitAssigner", 1, unitassigner.New)
 
@@ -335,6 +341,7 @@ func AllFacades() *facade.Registry {
 	reg("Upgrader", 1, upgrader.NewUpgraderFacade)
 	reg("UpgradeSeries", 1, upgradeseries.NewAPI)
 	reg("UpgradeSteps", 1, upgradesteps.NewFacadeV1)
+	reg("UpgradeSteps", 2, upgradesteps.NewFacadeV2)
 	reg("UserManager", 1, usermanager.NewUserManagerAPI)
 	reg("UserManager", 2, usermanager.NewUserManagerAPI) // Adds ResetPassword
 

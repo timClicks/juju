@@ -62,6 +62,12 @@ type UniterExecutionObserver interface {
 	HookFailed(hookName string)
 }
 
+// RebootQuerier is implemented by types that can deliver one-off machine
+// reboot notifications to entities.
+type RebootQuerier interface {
+	Query(tag names.Tag) (bool, error)
+}
+
 // Uniter implements the capabilities of the unit agent. It is not intended to
 // implement the actual *behaviour* of the unit agent; that responsibility is
 // delegated to Mode values, which are expected to react to events and direct
@@ -72,9 +78,10 @@ type Uniter struct {
 	paths     Paths
 	unit      *uniter.Unit
 	modelType model.ModelType
-	relations relation.Relations
 	storage   *storage.Attachments
 	clock     clock.Clock
+
+	relationStateTracker relation.RelationStateTracker
 
 	// Cache the last reported status information
 	// so we don't make unnecessary api calls.
@@ -126,6 +133,10 @@ type Uniter struct {
 	// downloader is the downloader that should be used to get the charm
 	// archive.
 	downloader charm.Downloader
+
+	// rebootQuerier allows the uniter to detect when the machine has
+	// rebooted so we can notify the charms accordingly.
+	rebootQuerier RebootQuerier
 }
 
 // UniterParams hold all the necessary parameters for a new Uniter.
@@ -152,10 +163,12 @@ type UniterParams struct {
 	// TODO (mattyw, wallyworld, fwereade) Having the observer here make this approach a bit more legitimate, but it isn't.
 	// the observer is only a stop gap to be used in tests. A better approach would be to have the uniter tests start hooks
 	// that write to files, and have the tests watch the output to know that hooks have finished.
-	Observer UniterExecutionObserver
+	Observer      UniterExecutionObserver
+	RebootQuerier RebootQuerier
 }
 
-type NewOperationExecutorFunc func(string, operation.State, func(string) (func(), error)) (operation.Executor, error)
+// NewOperationExecutorFunc is a func which returns an operations.Executor.
+type NewOperationExecutorFunc func(operation.ExecutorConfig) (operation.Executor, error)
 
 // ProviderIDGetter defines the API to get provider ID.
 type ProviderIDGetter interface {
@@ -209,6 +222,7 @@ func newUniter(uniterParams *UniterParams) func() (worker.Worker, error) {
 		runningStatusChannel:    uniterParams.RunningStatusChannel,
 		runningStatusFunc:       uniterParams.RunningStatusFunc,
 		runListener:             uniterParams.RunListener,
+		rebootQuerier:           uniterParams.RebootQuerier,
 	}
 	startFunc := func() (worker.Worker, error) {
 		plan := catacomb.Plan{
@@ -359,6 +373,26 @@ func (u *Uniter) loop(unitTag names.UnitTag) (err error) {
 		return nil
 	}
 
+	// If the machine rebooted and the charm was previously started, inject
+	// a start hook to notify charms of the reboot. This logic only makes
+	// sense for IAAS workloads as pods in a CAAS scenario can be recycled
+	// at any time.
+	if u.modelType == model.IAAS {
+		machineRebooted, err := u.rebootQuerier.Query(unitTag)
+		if err != nil {
+			return errors.Annotatef(err, "could not check reboot status for %q", unitTag)
+		}
+		if opState.Started && machineRebooted {
+			logger.Infof("reboot detected; triggering implicit start hook to notify charm")
+			op, err := u.operationFactory.NewRunHook(hook.Info{Kind: hooks.Start})
+			if err != nil {
+				return errors.Trace(err)
+			} else if err = u.operationExecutor.Run(op, nil); err != nil {
+				return errors.Trace(err)
+			}
+		}
+	}
+
 	for {
 		if err = restartWatcher(); err != nil {
 			err = errors.Annotate(err, "(re)starting watcher")
@@ -375,7 +409,8 @@ func (u *Uniter) loop(unitTag names.UnitTag) (err error) {
 			Actions:             actions.NewResolver(),
 			UpgradeSeries:       upgradeseries.NewResolver(),
 			Leadership:          uniterleadership.NewResolver(),
-			Relations:           relation.NewRelationsResolver(u.relations),
+			CreatedRelations:    relation.NewCreatedRelationResolver(u.relationStateTracker),
+			Relations:           relation.NewRelationResolver(u.relationStateTracker, u.unit),
 			Storage:             storage.NewResolver(u.storage, u.modelType),
 			Commands: runcommands.NewCommandsResolver(
 				u.commands, watcher.CommandCompleted,
@@ -540,28 +575,24 @@ func (u *Uniter) init(unitTag names.UnitTag) (err error) {
 	if err := tools.EnsureSymlinks(u.paths.ToolsDir, u.paths.ToolsDir, jujuc.CommandNames()); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(u.paths.State.RelationsDir, 0755); err != nil {
-		return errors.Trace(err)
-	}
-	relations, err := relation.NewRelations(
-		relation.RelationsConfig{
+	relStateTracker, err := relation.NewRelationStateTracker(
+		relation.RelationStateTrackerConfig{
 			State:                u.st,
-			UnitTag:              unitTag,
+			Unit:                 u.unit,
 			Tracker:              u.leadershipTracker,
 			NewLeadershipContext: context.NewLeadershipContext,
 			CharmDir:             u.paths.State.CharmDir,
-			RelationsDir:         u.paths.State.RelationsDir,
 			Abort:                u.catacomb.Dying(),
 		})
 	if err != nil {
-		return errors.Annotatef(err, "cannot create relations")
+		return errors.Annotatef(err, "cannot create relation state tracker")
 	}
-	u.relations = relations
+	u.relationStateTracker = relStateTracker
 	u.commands = runcommands.NewCommands()
 	u.commandChannel = make(chan string)
 
 	storageAttachments, err := storage.NewAttachments(
-		u.st, unitTag, u.paths.State.StorageDir, u.catacomb.Dying(),
+		u.st, unitTag, u.unit, u.catacomb.Dying(),
 	)
 	if err != nil {
 		return errors.Annotatef(err, "cannot create storage hook source")
@@ -586,9 +617,9 @@ func (u *Uniter) init(unitTag names.UnitTag) (err error) {
 	}
 	contextFactory, err := context.NewContextFactory(context.FactoryConfig{
 		State:            u.st,
-		UnitTag:          unitTag,
+		Unit:             u.unit,
 		Tracker:          u.leadershipTracker,
-		GetRelationInfos: u.relations.GetInfo,
+		GetRelationInfos: u.relationStateTracker.GetInfo,
 		Storage:          u.storage,
 		Paths:            u.paths,
 		Clock:            u.clock,
@@ -638,12 +669,20 @@ func (u *Uniter) init(unitTag names.UnitTag) (err error) {
 		}
 	}
 
-	operationExecutor, err := u.newOperationExecutor(u.paths.State.OperationsFile, initialState, u.acquireExecutionLock)
+	operationExecutor, err := u.newOperationExecutor(operation.ExecutorConfig{
+		StateReadWriter: u.unit,
+		InitialState:    initialState,
+		AcquireLock:     u.acquireExecutionLock,
+	})
 	if err != nil {
 		return errors.Trace(err)
 	}
 	u.operationExecutor = operationExecutor
 
+	// Ensure we have an agent directory to to write the socket.
+	if err := os.MkdirAll(u.paths.State.BaseDir, 0755); err != nil {
+		return errors.Trace(err)
+	}
 	socket := u.paths.Runtime.LocalJujuRunSocket.Server
 	logger.Debugf("starting local juju-run listener on %v", socket)
 	u.localRunListener, err = NewRunListener(socket)
@@ -724,7 +763,7 @@ func (u *Uniter) reportHookError(hookInfo hook.Info) error {
 		if hookInfo.RemoteUnit != "" {
 			statusData["remote-unit"] = hookInfo.RemoteUnit
 		}
-		relationName, err := u.relations.Name(hookInfo.RelationId)
+		relationName, err := u.relationStateTracker.Name(hookInfo.RelationId)
 		if err != nil {
 			return errors.Trace(err)
 		}

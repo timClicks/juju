@@ -22,7 +22,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/caas/kubernetes/provider"
 	"github.com/juju/juju/cloudconfig/podcfg"
 	"github.com/juju/juju/controller"
@@ -80,14 +79,14 @@ func (s *bootstrapSuite) SetUpTest(c *gc.C) {
 	pcfg.Bootstrap.HostedModelConfig = map[string]interface{}{
 		"name": "hosted-model",
 	}
-	pcfg.Bootstrap.StateServingInfo = params.StateServingInfo{
+	pcfg.Bootstrap.StateServingInfo = controller.StateServingInfo{
 		Cert:         testing.ServerCert,
 		PrivateKey:   testing.ServerKey,
 		CAPrivateKey: testing.CAKey,
 		StatePort:    123,
 		APIPort:      456,
 	}
-	pcfg.Bootstrap.StateServingInfo = params.StateServingInfo{
+	pcfg.Bootstrap.StateServingInfo = controller.StateServingInfo{
 		Cert:         testing.ServerCert,
 		PrivateKey:   testing.ServerKey,
 		CAPrivateKey: testing.CAKey,
@@ -231,7 +230,12 @@ func (s *bootstrapSuite) TestBootstrap(c *gc.C) {
 	}
 
 	APIPort := s.controllerCfg.APIPort()
-	ns := &core.Namespace{ObjectMeta: v1.ObjectMeta{Name: s.getNamespace()}}
+	ns := &core.Namespace{
+		ObjectMeta: v1.ObjectMeta{
+			Name:   s.getNamespace(),
+			Labels: provider.LabelsForModel("controller-1"),
+		},
+	}
 	ns.Name = s.getNamespace()
 	s.ensureJujuNamespaceAnnotations(true, ns)
 	svcNotProvisioned := &core.Service{
@@ -689,7 +693,7 @@ $JUJU_TOOLS_DIR/jujud machine --data-dir $JUJU_DATA_DIR --controller-id 0 --log-
 			Return(svcNotProvisioned, nil),
 
 		// below calls are for GetService - 1st address no provisioned yet.
-		s.mockServices.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app==juju-controller-test"}).
+		s.mockServices.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app=juju-controller-test"}).
 			Return(&core.ServiceList{Items: []core.Service{*svcNotProvisioned}}, nil),
 		s.mockStatefulSets.EXPECT().Get("juju-operator-juju-controller-test", v1.GetOptions{}).
 			Return(nil, s.k8sNotFoundError()),
@@ -701,7 +705,7 @@ $JUJU_TOOLS_DIR/jujud machine --data-dir $JUJU_DATA_DIR --controller-id 0 --log-
 			Return(nil, s.k8sNotFoundError()),
 
 		// below calls are for GetService - 2nd address is ready.
-		s.mockServices.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app==juju-controller-test"}).
+		s.mockServices.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app=juju-controller-test"}).
 			Return(&core.ServiceList{Items: []core.Service{*svcProvisioned}}, nil),
 		s.mockStatefulSets.EXPECT().Get("juju-operator-juju-controller-test", v1.GetOptions{}).
 			Return(nil, s.k8sNotFoundError()),
@@ -739,7 +743,7 @@ $JUJU_TOOLS_DIR/jujud machine --data-dir $JUJU_DATA_DIR --controller-id 0 --log-
 			Return(emptyConfigMap, nil),
 		s.mockConfigMaps.EXPECT().Create(configMapWithBootstrapParamsAdded).AnyTimes().
 			Return(nil, s.k8sAlreadyExistsError()),
-		s.mockConfigMaps.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app==juju-controller-test"}).
+		s.mockConfigMaps.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app=juju-controller-test"}).
 			Return(&core.ConfigMapList{Items: []core.ConfigMap{*emptyConfigMap}}, nil),
 		s.mockConfigMaps.EXPECT().Update(configMapWithBootstrapParamsAdded).AnyTimes().
 			Return(configMapWithBootstrapParamsAdded, nil),
@@ -749,7 +753,7 @@ $JUJU_TOOLS_DIR/jujud machine --data-dir $JUJU_DATA_DIR --controller-id 0 --log-
 			Return(configMapWithBootstrapParamsAdded, nil),
 		s.mockConfigMaps.EXPECT().Create(configMapWithAgentConfAdded).AnyTimes().
 			Return(nil, s.k8sAlreadyExistsError()),
-		s.mockConfigMaps.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app==juju-controller-test"}).
+		s.mockConfigMaps.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app=juju-controller-test"}).
 			Return(&core.ConfigMapList{Items: []core.ConfigMap{*configMapWithBootstrapParamsAdded}}, nil),
 		s.mockConfigMaps.EXPECT().Update(configMapWithAgentConfAdded).AnyTimes().
 			Return(configMapWithAgentConfAdded, nil),

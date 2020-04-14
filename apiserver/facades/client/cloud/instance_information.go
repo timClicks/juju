@@ -27,10 +27,7 @@ func (g cloudEnvironConfigGetter) CloudSpec() (environs.CloudSpec, error) {
 	if err != nil {
 		return environs.CloudSpec{}, errors.Trace(err)
 	}
-	cloudName := model.Cloud()
-	regionName := g.region
-	credentialTag, _ := model.CloudCredential()
-	return stateenvirons.CloudSpec(g.Backend, cloudName, regionName, credentialTag)
+	return stateenvirons.CloudSpecForModel(model)
 }
 
 // InstanceTypes returns instance type information for the cloud and region
@@ -71,8 +68,8 @@ func instanceTypes(api *CloudAPI,
 			result[i] = params.InstanceTypesResult{Error: common.ServerError(err)}
 			continue
 		}
-		if m.Cloud() != cloudTag.Id() {
-			result[i] = params.InstanceTypesResult{Error: common.ServerError(errors.NotValidf("asking %s cloud information to %s cloud", cloudTag.Id(), m.Cloud()))}
+		if m.CloudName() != cloudTag.Id() {
+			result[i] = params.InstanceTypesResult{Error: common.ServerError(errors.NotValidf("asking %s cloud information to %s cloud", cloudTag.Id(), m.CloudName()))}
 			continue
 		}
 
