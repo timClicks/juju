@@ -116,3 +116,62 @@ func (*subnetSuite) TestFilterInFanNetwork(c *gc.C) {
 		c.Check(res, gc.DeepEquals, t.expected)
 	}
 }
+
+func (*subnetSuite) TestSubnetInfosEquality(c *gc.C) {
+	s1 := network.SubnetInfos{
+		{ID: "1"},
+		{ID: "2"},
+	}
+
+	s2 := network.SubnetInfos{
+		{ID: "2"},
+		{ID: "1"},
+	}
+
+	s3 := append(s2, network.SubnetInfo{ID: "3"})
+
+	c.Check(s1.EqualTo(s2), jc.IsTrue)
+	c.Check(s1.EqualTo(s3), jc.IsFalse)
+}
+
+func (*subnetSuite) TestSubnetInfosSpaceIDs(c *gc.C) {
+	s := network.SubnetInfos{
+		{ID: "1", SpaceID: network.AlphaSpaceId},
+		{ID: "2", SpaceID: network.AlphaSpaceId},
+		{ID: "3", SpaceID: "666"},
+	}
+
+	c.Check(s.SpaceIDs().SortedValues(), jc.DeepEquals, []string{network.AlphaSpaceId, "666"})
+}
+
+func (*subnetSuite) TestSubnetInfosGetByUnderLayCIDR(c *gc.C) {
+	s := network.SubnetInfos{
+		{
+			ID:      "1",
+			FanInfo: &network.FanCIDRs{FanLocalUnderlay: "10.10.10.0/24"},
+		},
+		{
+			ID:      "2",
+			FanInfo: &network.FanCIDRs{FanLocalUnderlay: "20.20.20.0/24"},
+		},
+		{
+			ID:      "3",
+			FanInfo: &network.FanCIDRs{FanLocalUnderlay: "20.20.20.0/24"},
+		},
+	}
+
+	_, err := s.GetByUnderlayCIDR("invalid")
+	c.Check(err, jc.Satisfies, errors.IsNotValid)
+
+	overlays, err := s.GetByUnderlayCIDR(s[0].FanLocalUnderlay())
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(overlays, gc.DeepEquals, network.SubnetInfos{s[0]})
+
+	overlays, err = s.GetByUnderlayCIDR(s[1].FanLocalUnderlay())
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(overlays, gc.DeepEquals, network.SubnetInfos{s[1], s[2]})
+
+	overlays, err = s.GetByUnderlayCIDR("30.30.30.0/24")
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(overlays, gc.HasLen, 0)
+}
