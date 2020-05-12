@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 
 	"github.com/juju/errors"
-	"gopkg.in/juju/names.v3"
+	"github.com/juju/names/v4"
 
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/core/status"
 	environscontext "github.com/juju/juju/environs/context"
 	"github.com/juju/juju/storage"
+	"github.com/juju/juju/wrench"
 )
 
 // createFilesystems creates filesystems with the specified parameters.
@@ -226,6 +227,9 @@ func removeFilesystems(ctx *context, ops map[names.FilesystemTag]*removeFilesyst
 		}
 		for i, err := range errs {
 			tag := tags[i]
+			if wrench.IsActive("storageprovisioner", "RemoveFilesystem") {
+				err = errors.New("wrench active")
+			}
 			if err == nil {
 				remove = append(remove, tag)
 				continue
@@ -330,6 +334,9 @@ func detachFilesystems(ctx *context, ops map[params.MachineStorageId]*detachFile
 				AttachmentTag: p.Filesystem.String(),
 			}
 			entityStatus := &statuses[len(statuses)-1]
+			if wrench.IsActive("storageprovisioner", "DetachFilesystem") {
+				err = errors.New("wrench active")
+			}
 			if err != nil {
 				reschedule = append(reschedule, ops[id])
 				entityStatus.Status = status.Detaching.String()

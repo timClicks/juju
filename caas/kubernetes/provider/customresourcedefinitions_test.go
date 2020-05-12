@@ -129,7 +129,7 @@ func (s *K8sBrokerSuite) TestEnsureServiceCustomResourceDefinitionsCreate(c *gc.
 
 	crds := []k8sspecs.K8sCustomResourceDefinitionSpec{
 		{
-			Name: "tfjobs.kubeflow.org",
+			Meta: k8sspecs.Meta{Name: "tfjobs.kubeflow.org"},
 			Spec: apiextensionsv1beta1.CustomResourceDefinitionSpec{
 				Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
 					Kind:     "TFJob",
@@ -241,7 +241,7 @@ func (s *K8sBrokerSuite) TestEnsureServiceCustomResourceDefinitionsUpdate(c *gc.
 
 	crds := []k8sspecs.K8sCustomResourceDefinitionSpec{
 		{
-			Name: "tfjobs.kubeflow.org",
+			Meta: k8sspecs.Meta{Name: "tfjobs.kubeflow.org"},
 			Spec: apiextensionsv1beta1.CustomResourceDefinitionSpec{
 				Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
 					Kind:     "TFJob",
@@ -764,7 +764,7 @@ func (s *K8sBrokerSuite) TestEnsureServiceCustomResourcesUpdate(c *gc.C) {
 			err = s.clock.WaitAdvance(time.Second, testing.ShortWait, 1)
 			c.Assert(err, jc.ErrorIsNil)
 		},
-		// waits CRD stablised.
+		// waits CRD stabilised.
 		// 1. CRD not found.
 		s.mockCustomResourceDefinition.EXPECT().Get("tfjobs.kubeflow.org", v1.GetOptions{}).Times(1).Return(nil, s.k8sNotFoundError()),
 		// 2. CRD resource type not ready yet.

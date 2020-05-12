@@ -11,17 +11,17 @@ import (
 	"github.com/juju/clock"
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
-	k8sprovider "github.com/juju/juju/caas/kubernetes/provider"
-	"github.com/juju/juju/network"
-	"github.com/juju/juju/state"
+	"github.com/juju/names/v4"
 	"github.com/juju/retry"
-	"gopkg.in/juju/names.v3"
 	k8score "k8s.io/api/core/v1"
 
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/common/networkingcommon"
 	"github.com/juju/juju/apiserver/params"
+	k8sprovider "github.com/juju/juju/caas/kubernetes/provider"
 	corenetwork "github.com/juju/juju/core/network"
+	"github.com/juju/juju/network"
+	"github.com/juju/juju/state"
 )
 
 // TODO (manadart 2019-10-09):
@@ -238,7 +238,58 @@ func (n *NetworkInfo) ProcessAPIRequest(args params.NetworkInfoParams) (params.N
 		result.Results[endpoint] = info
 	}
 
-	return result, nil
+	return dedupNetworkInfoResults(result), nil
+}
+
+func dedupNetworkInfoResults(info params.NetworkInfoResults) params.NetworkInfoResults {
+	for epName, res := range info.Results {
+		if res.Error != nil {
+			continue
+		}
+		res.IngressAddresses = dedupStringListPreservingOrder(res.IngressAddresses)
+		res.EgressSubnets = dedupStringListPreservingOrder(res.EgressSubnets)
+		for infoIdx, info := range res.Info {
+			res.Info[infoIdx].Addresses = dedupAddrList(info.Addresses)
+		}
+		info.Results[epName] = res
+	}
+
+	return info
+}
+
+func dedupStringListPreservingOrder(values []string) []string {
+	// Ideally, we would use a set.Strings(values).Values() here but since
+	// it does not preserve the insertion order we need to do this manually.
+	seen := set.NewStrings()
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if seen.Contains(v) {
+			continue
+		}
+		seen.Add(v)
+		out = append(out, v)
+	}
+
+	return out
+}
+
+func dedupAddrList(addrList []params.InterfaceAddress) []params.InterfaceAddress {
+	if len(addrList) <= 1 {
+		return addrList
+	}
+
+	uniqueAddrList := make([]params.InterfaceAddress, 0, len(addrList))
+	seenAddrSet := set.NewStrings()
+	for _, addr := range addrList {
+		if seenAddrSet.Contains(addr.Address) {
+			continue
+		}
+
+		seenAddrSet.Add(addr.Address)
+		uniqueAddrList = append(uniqueAddrList, addr)
+	}
+
+	return uniqueAddrList
 }
 
 // getRelationNetworkInfo returns the endpoint name, network space

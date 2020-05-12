@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/mgo.v2"
 
 	"github.com/juju/juju/caas"
@@ -356,7 +356,7 @@ func (s *StorageStateSuiteBase) obliterateUnitStorage(c *gc.C, tag names.UnitTag
 }
 
 func (s *StorageStateSuiteBase) obliterateVolume(c *gc.C, tag names.VolumeTag) {
-	err := s.storageBackend.DestroyVolume(tag)
+	err := s.storageBackend.DestroyVolume(tag, false)
 	if errors.IsNotFound(err) {
 		return
 	}
@@ -370,14 +370,14 @@ func (s *StorageStateSuiteBase) obliterateVolume(c *gc.C, tag names.VolumeTag) {
 }
 
 func (s *StorageStateSuiteBase) obliterateVolumeAttachment(c *gc.C, m names.Tag, v names.VolumeTag) {
-	err := s.storageBackend.DetachVolume(m, v)
+	err := s.storageBackend.DetachVolume(m, v, false)
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.storageBackend.RemoveVolumeAttachment(m, v)
+	err = s.storageBackend.RemoveVolumeAttachment(m, v, false)
 	c.Assert(err, jc.ErrorIsNil)
 }
 
 func (s *StorageStateSuiteBase) obliterateFilesystem(c *gc.C, tag names.FilesystemTag) {
-	err := s.storageBackend.DestroyFilesystem(tag)
+	err := s.storageBackend.DestroyFilesystem(tag, false)
 	if errors.IsNotFound(err) {
 		return
 	}
@@ -393,7 +393,7 @@ func (s *StorageStateSuiteBase) obliterateFilesystem(c *gc.C, tag names.Filesyst
 func (s *StorageStateSuiteBase) obliterateFilesystemAttachment(c *gc.C, host names.Tag, f names.FilesystemTag) {
 	err := s.storageBackend.DetachFilesystem(host, f)
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.storageBackend.RemoveFilesystemAttachment(host, f)
+	err = s.storageBackend.RemoveFilesystemAttachment(host, f, false)
 	c.Assert(err, jc.ErrorIsNil)
 }
 
@@ -763,6 +763,43 @@ func (s *StorageStateSuite) TestUnitEnsureDead(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 }
 
+func (s *StorageStateSuite) TestUnitStorageProvisionerError(c *gc.C) {
+	if s.series == "kubernetes" {
+		c.Skip("volumes on kubernetes not supported")
+	}
+	_, u, storageTag := s.setupSingleStorage(c, "block", "loop-pool")
+	s.provisionStorageVolume(c, u, storageTag)
+
+	err := u.Destroy()
+	c.Assert(err, jc.ErrorIsNil)
+	// until all storage attachments are removed, the unit cannot be
+	// marked as being dead.
+	assertUnitEnsureDeadError := func() {
+		err = u.EnsureDead()
+		c.Assert(err, gc.ErrorMatches, "unit has storage attachments")
+	}
+	assertUnitEnsureDeadError()
+	err = s.storageBackend.DetachStorage(storageTag, u.UnitTag(), false, dontWait)
+	c.Assert(err, jc.ErrorIsNil)
+	assertUnitEnsureDeadError()
+	err = s.storageBackend.DestroyStorageInstance(storageTag, true, false, dontWait)
+	c.Assert(err, jc.ErrorIsNil)
+	assertUnitEnsureDeadError()
+	err = s.storageBackend.RemoveStorageAttachment(storageTag, u.UnitTag(), false)
+	c.Assert(err, jc.ErrorIsNil)
+	err = u.EnsureDead()
+	c.Assert(err, jc.ErrorIsNil)
+
+	// Removing a unit will still succeed even if the storage provisioner is broken.
+	s.policy = testing.MockPolicy{
+		GetStorageProviderRegistry: func() (storage.ProviderRegistry, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	err = u.Remove()
+	c.Assert(err, jc.ErrorIsNil)
+}
+
 func (s *StorageStateSuite) TestRemoveStorageAttachmentsRemovesDyingInstance(c *gc.C) {
 	if s.series == "kubernetes" {
 		c.Skip("volumes on kubernetes not supported")
@@ -896,9 +933,9 @@ func (s *StorageStateSuite) TestAttachStorageAssignedMachineExistingVolume(c *gc
 	// Detach, but do not destroy, the storage.
 	err = s.storageBackend.DetachStorage(storageTag, u.UnitTag(), false, dontWait)
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.storageBackend.RemoveFilesystemAttachment(oldMachineTag, filesystem.FilesystemTag())
+	err = s.storageBackend.RemoveFilesystemAttachment(oldMachineTag, filesystem.FilesystemTag(), false)
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.storageBackend.RemoveVolumeAttachment(oldMachineTag, volume.VolumeTag())
+	err = s.storageBackend.RemoveVolumeAttachment(oldMachineTag, volume.VolumeTag(), false)
 	c.Assert(err, jc.ErrorIsNil)
 
 	// Assign the second unit to a machine so that when we

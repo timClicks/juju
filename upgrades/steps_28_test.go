@@ -10,12 +10,12 @@ import (
 	"strings"
 
 	"github.com/golang/mock/gomock"
+	"github.com/juju/charm/v7/hooks"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6/hooks"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/yaml.v2"
 
 	"github.com/juju/juju/agent"
@@ -45,6 +45,11 @@ func (s *steps28Suite) TestIncrementTasksSequence(c *gc.C) {
 
 func (s *steps28Suite) TestAddMachineIDToSubordinates(c *gc.C) {
 	step := findStateStep(c, v280, "add machine ID to subordinate units")
+	c.Assert(step.Targets(), jc.DeepEquals, []upgrades.Target{upgrades.DatabaseMaster})
+}
+
+func (s *steps28Suite) TestAddOriginToIPAddresses(c *gc.C) {
+	step := findStateStep(c, v280, "add origin to ip addresses")
 	c.Assert(step.Targets(), jc.DeepEquals, []upgrades.Target{upgrades.DatabaseMaster})
 }
 

@@ -14,16 +14,17 @@ import (
 	"github.com/juju/clock/testclock"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/os/series"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	"github.com/juju/utils/arch"
+	"github.com/juju/utils/symlink"
 	"github.com/juju/version"
+	"github.com/juju/worker/v2"
+	"github.com/juju/worker/v2/workertest"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
-	"gopkg.in/juju/worker.v1"
-	"gopkg.in/juju/worker.v1/workertest"
 
 	agenttools "github.com/juju/juju/agent/tools"
 	apiuniter "github.com/juju/juju/api/uniter"
@@ -433,6 +434,39 @@ func (s *WorkerSuite) TestRemovedApplication(c *gc.C) {
 	c.Assert(err, gc.ErrorMatches, "agent should be terminated")
 }
 
+func (s *WorkerSuite) TestMakeAgentSymlinks(c *gc.C) {
+	w, err := caasoperator.NewWorker(s.config)
+	c.Assert(err, jc.ErrorIsNil)
+	defer workertest.CleanKill(c, w)
+
+	unitTag := names.NewUnitTag("gitlab/0")
+	op := w.(*caasoperator.CaasOperator)
+	unitDir := filepath.Join(op.GetDataDir(), "agents", unitTag.String())
+	err = os.MkdirAll(unitDir, 0755)
+	c.Assert(err, jc.ErrorIsNil)
+
+	unitCharmLegacySymlink := filepath.Join(unitDir, "charm")
+	fakeAppDir := c.MkDir()
+	err = symlink.New(fakeAppDir, unitCharmLegacySymlink)
+	c.Assert(err, jc.ErrorIsNil)
+	assertSymlinkExist(c, unitCharmLegacySymlink)
+
+	err = op.MakeAgentSymlinks(unitTag)
+	c.Assert(err, jc.ErrorIsNil)
+	assertSymlinkNotExist(c, unitCharmLegacySymlink)
+}
+
+func assertSymlinkExist(c *gc.C, path string) {
+	symlinkExists, err := symlink.IsSymlink(path)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(symlinkExists, jc.IsTrue)
+}
+
+func assertSymlinkNotExist(c *gc.C, path string) {
+	_, err := symlink.IsSymlink(path)
+	c.Assert(errors.Cause(err), jc.Satisfies, os.IsNotExist)
+}
+
 func (s *WorkerSuite) TestContainerStart(c *gc.C) {
 	uniterStarted := make(chan struct{})
 	uniterGotRunning := make(chan struct{})
@@ -448,6 +482,7 @@ func (s *WorkerSuite) TestContainerStart(c *gc.C) {
 		go func() {
 			close(uniterStarted)
 			c.Assert(params.UnitTag.Id(), gc.Equals, "gitlab/0")
+			c.Assert(params.NewRemoteRunnerExecutor, gc.NotNil)
 			select {
 			case <-params.ContainerRunningStatusChannel:
 			case <-time.After(coretesting.LongWait):

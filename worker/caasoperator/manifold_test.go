@@ -12,14 +12,14 @@ import (
 	"github.com/juju/clock/testclock"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
+	"github.com/juju/worker/v2"
+	"github.com/juju/worker/v2/dependency"
+	dt "github.com/juju/worker/v2/dependency/testing"
+	"github.com/juju/worker/v2/workertest"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
-	"gopkg.in/juju/worker.v1"
-	"gopkg.in/juju/worker.v1/dependency"
-	dt "gopkg.in/juju/worker.v1/dependency/testing"
-	"gopkg.in/juju/worker.v1/workertest"
 
 	"github.com/juju/juju/api/base"
 	"github.com/juju/juju/apiserver/params"
@@ -180,7 +180,6 @@ func (s *ManifoldSuite) TestStart(c *gc.C) {
 	c.Assert(config.RunListenerSocketFunc, gc.NotNil)
 	c.Assert(config.UniterParams.UpdateStatusSignal, gc.NotNil)
 	c.Assert(config.UniterParams.NewOperationExecutor, gc.NotNil)
-	c.Assert(config.UniterParams.NewRemoteRunnerExecutor, gc.NotNil)
 	c.Assert(config.Logger, gc.NotNil)
 	c.Assert(config.ExecClient, gc.NotNil)
 	config.LeadershipTrackerFunc = nil
@@ -189,7 +188,6 @@ func (s *ManifoldSuite) TestStart(c *gc.C) {
 	config.RunListenerSocketFunc = nil
 	config.UniterParams.UpdateStatusSignal = nil
 	config.UniterParams.NewOperationExecutor = nil
-	config.UniterParams.NewRemoteRunnerExecutor = nil
 	config.Logger = nil
 	config.ExecClient = nil
 
@@ -220,6 +218,7 @@ func (s *ManifoldSuite) TestStart(c *gc.C) {
 				ServiceAddress:  "127.0.0.1",
 				OperatorAddress: "127.0.0.2",
 			},
+			Logger: loggo.GetLogger("juju.worker.uniter"),
 		},
 		OperatorInfo: caas.OperatorInfo{
 			CACert:     coretesting.CACert,

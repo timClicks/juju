@@ -9,13 +9,13 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	"github.com/juju/os/series"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	"github.com/juju/utils/arch"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api"
 	apimocks "github.com/juju/juju/api/base/mocks"
@@ -854,7 +854,7 @@ func (s *provisionerSuite) TestHostChangesForContainer(c *gc.C) {
 		state.LinkLayerDeviceAddress{
 			DeviceName:   "ens3",
 			CIDRAddress:  "10.0.0.10/24",
-			ConfigMethod: state.StaticAddress,
+			ConfigMethod: corenetwork.StaticAddress,
 		},
 	)
 	c.Assert(err, jc.ErrorIsNil)

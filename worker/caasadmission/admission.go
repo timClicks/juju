@@ -27,7 +27,7 @@ type AdmissionCreatorFunc func() (func(), error)
 const (
 	// Component describes a sub zone to use on the juju tld for unique resource
 	// ids. For example using this component "admission" with "juju.io" would
-	// yeild admission.juju.io
+	// yield admission.juju.io
 	Component = "admission"
 )
 
@@ -59,6 +59,7 @@ func NewAdmissionCreator(
 	failurePolicy := admission.Ignore
 	matchPolicy := admission.Equivalent
 	ruleScope := admission.AllScopes
+	sideEffects := admission.SideEffectClassNone
 
 	// MutatingWebjook Obj
 	obj := admission.MutatingWebhookConfiguration{
@@ -69,6 +70,7 @@ func NewAdmissionCreator(
 		},
 		Webhooks: []admission.MutatingWebhook{
 			{
+				SideEffects: &sideEffects,
 				ClientConfig: admission.WebhookClientConfig{
 					CABundle: caPemBuffer.Bytes(),
 					Service:  service,

@@ -17,10 +17,10 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/proxy"
 	"github.com/juju/utils/shell"
 	"github.com/juju/version"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/yaml.v2"
 
 	"github.com/juju/juju/agent"
@@ -794,6 +794,10 @@ func NewInstanceConfig(
 	if err != nil {
 		return nil, err
 	}
+	transientDataDir, err := paths.TransientDataDir(series)
+	if err != nil {
+		return nil, err
+	}
 	cloudInitOutputLog := path.Join(logDir, "cloud-init-output.log")
 	icfg := &InstanceConfig{
 		// Fixed entries.
@@ -802,6 +806,7 @@ func NewInstanceConfig(
 		MetricsSpoolDir:         metricsSpoolDir,
 		Jobs:                    []model.MachineJob{model.JobHostUnits},
 		CloudInitOutputLog:      cloudInitOutputLog,
+		TransientDataDir:        transientDataDir,
 		MachineAgentServiceName: "jujud-" + names.NewMachineTag(machineID).String(),
 		Series:                  series,
 		Tags:                    map[string]string{},

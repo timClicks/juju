@@ -16,11 +16,11 @@ import (
 	"github.com/juju/cmd"
 	"github.com/juju/errors"
 	"github.com/juju/gnuflag"
+	"github.com/juju/names/v4"
 	"github.com/juju/os/series"
 	"github.com/juju/utils/arch"
 	"github.com/juju/utils/ssh"
 	"github.com/juju/version"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/agent/agentbootstrap"
@@ -270,6 +270,7 @@ func (c *BootstrapCommand) Run(_ *cmd.Context) error {
 		} else {
 			agentConfig.SetMongoMemoryProfile(mmprof)
 		}
+		agentConfig.SetJujuDBSnapChannel(args.ControllerConfig.JujuDBSnapChannel())
 		return nil
 	}); err != nil {
 		return fmt.Errorf("cannot write agent config: %v", err)
@@ -631,7 +632,7 @@ func storeImageMetadataInState(st *state.State, env environs.BootstrapEnviron, s
 		}
 		metadataState[i] = m
 	}
-	if err := st.CloudImageMetadataStorage.SaveMetadataNoExpiry(metadataState); err != nil {
+	if err := st.CloudImageMetadataStorage.SaveMetadata(metadataState); err != nil {
 		return errors.Annotatef(err, "cannot cache image metadata")
 	}
 	return nil

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/clock/testclock"
+	"github.com/juju/names/v4"
 	"github.com/juju/proxy"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/api/block"
@@ -178,7 +178,7 @@ func (s *HookContextSuite) AddContextRelation(c *gc.C, name string) {
 	s.relunits[rel.Id()] = ru
 	apiRel, err := s.uniter.Relation(rel.Tag().(names.RelationTag))
 	c.Assert(err, jc.ErrorIsNil)
-	apiRelUnit, err := apiRel.Unit(s.apiUnit)
+	apiRelUnit, err := apiRel.Unit(s.apiUnit.Tag())
 	c.Assert(err, jc.ErrorIsNil)
 	s.apiRelunits[rel.Id()] = apiRelUnit
 }
@@ -194,7 +194,7 @@ func (s *HookContextSuite) getHookContext(c *gc.C, uuid string, relid int, remot
 	relctxs := map[int]*context.ContextRelation{}
 	for relId, relUnit := range s.apiRelunits {
 		cache := context.NewRelationCache(relUnit.ReadSettings, nil)
-		relctxs[relId] = context.NewContextRelation(relUnit, cache)
+		relctxs[relId] = context.NewContextRelation(&relUnitShim{relUnit}, cache)
 	}
 
 	env, err := s.State.Model()
@@ -235,7 +235,7 @@ func (s *HookContextSuite) getMeteredHookContext(c *gc.C, uuid string, relid int
 	relctxs := map[int]*context.ContextRelation{}
 	for relId, relUnit := range s.apiRelunits {
 		cache := context.NewRelationCache(relUnit.ReadSettings, nil)
-		relctxs[relId] = context.NewContextRelation(relUnit, cache)
+		relctxs[relId] = context.NewContextRelation(&relUnitShim{relUnit}, cache)
 	}
 
 	context, err := context.NewHookContext(context.HookContextParams{

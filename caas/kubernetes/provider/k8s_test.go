@@ -12,11 +12,11 @@ import (
 	jujuclock "github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/juju/juju/core/network"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/version"
+	"github.com/juju/worker/v2/workertest"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
-	"gopkg.in/juju/worker.v1/workertest"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	apps "k8s.io/api/apps/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -91,17 +91,42 @@ func (s *K8sSuite) TestPushUniqueVolume(c *gc.C) {
 			},
 		},
 	}
-	provider.PushUniqueVolume(podSpec, vol1)
+	aDifferentVol2 := core.Volume{
+		Name: "vol2",
+		VolumeSource: core.VolumeSource{
+			HostPath: &core.HostPathVolumeSource{
+				Path: "/var/log/foo",
+			},
+		},
+	}
+	err := provider.PushUniqueVolume(podSpec, vol1, false)
+	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(podSpec.Volumes, jc.DeepEquals, []core.Volume{
 		vol1,
 	})
-	provider.PushUniqueVolume(podSpec, vol1)
+
+	err = provider.PushUniqueVolume(podSpec, vol1, false)
+	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(podSpec.Volumes, jc.DeepEquals, []core.Volume{
 		vol1,
 	})
-	provider.PushUniqueVolume(podSpec, vol2)
+
+	err = provider.PushUniqueVolume(podSpec, vol2, false)
+	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(podSpec.Volumes, jc.DeepEquals, []core.Volume{
 		vol1, vol2,
+	})
+
+	err = provider.PushUniqueVolume(podSpec, aDifferentVol2, false)
+	c.Assert(err, gc.ErrorMatches, `duplicated volume "vol2" not valid`)
+	c.Assert(podSpec.Volumes, jc.DeepEquals, []core.Volume{
+		vol1, vol2,
+	})
+
+	err = provider.PushUniqueVolume(podSpec, aDifferentVol2, true)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(podSpec.Volumes, jc.DeepEquals, []core.Volume{
+		vol1, aDifferentVol2,
 	})
 }
 
@@ -1801,6 +1826,18 @@ func (s *K8sBrokerSuite) TestDeleteServiceForApplication(c *gc.C) {
 		s.mockDeployments.EXPECT().Delete("test", s.deleteOptions(v1.DeletePropagationForeground, "")).
 			Return(s.k8sNotFoundError()),
 
+		s.mockStatefulSets.EXPECT().DeleteCollection(
+			s.deleteOptions(v1.DeletePropagationForeground, ""),
+			v1.ListOptions{LabelSelector: "juju-app=test"},
+		).Return(nil),
+		s.mockDeployments.EXPECT().DeleteCollection(
+			s.deleteOptions(v1.DeletePropagationForeground, ""),
+			v1.ListOptions{LabelSelector: "juju-app=test"},
+		).Return(nil),
+
+		s.mockServices.EXPECT().List(v1.ListOptions{LabelSelector: "juju-app=test"}).
+			Return(&core.ServiceList{}, nil),
+
 		// delete secrets.
 		s.mockSecrets.EXPECT().DeleteCollection(
 			s.deleteOptions(v1.DeletePropagationForeground, ""),
@@ -1918,7 +1955,9 @@ func (s *K8sBrokerSuite) TestEnsureServiceNoUnits(c *gc.C) {
 			Return(nil, nil),
 	)
 
-	params := &caas.ServiceParams{}
+	params := &caas.ServiceParams{
+		PodSpec: getBasicPodspec(),
+	}
 	err := s.broker.EnsureService("app-name", func(_ string, _ status.Status, _ string, _ map[string]interface{}) error { return nil }, params, 0, nil)
 	c.Assert(err, jc.ErrorIsNil)
 }
@@ -6560,65 +6599,6 @@ func (s *K8sBrokerSuite) TestWatchContainerStartDefaultWaitForUnit(c *gc.C) {
 	case <-time.After(testing.LongWait):
 		c.Fatal("timed out waiting for event")
 	}
-}
-
-func (s *K8sBrokerSuite) TestUpgradeController(c *gc.C) {
-	ctrl := s.setupController(c)
-	defer ctrl.Finish()
-
-	ss := apps.StatefulSet{
-		ObjectMeta: v1.ObjectMeta{
-			Name: "controller",
-			Annotations: map[string]string{
-				"juju-version": "1.1.1",
-			},
-			Labels: map[string]string{"juju-operator": "controller"},
-		},
-		Spec: apps.StatefulSetSpec{
-			RevisionHistoryLimit: int32Ptr(0),
-			Template: core.PodTemplateSpec{
-				ObjectMeta: v1.ObjectMeta{
-					Annotations: map[string]string{
-						"juju-version": "1.1.1",
-					},
-				},
-				Spec: core.PodSpec{
-					Containers: []core.Container{
-						{Image: "foo"},
-						{Image: "jujud-operator:1.1.1"},
-					},
-				},
-			},
-		},
-	}
-	updated := ss
-	updated.Annotations["juju-version"] = "6.6.6"
-	updated.Spec.Template.Annotations["juju-version"] = "6.6.6"
-	updated.Spec.Template.Spec.Containers[1].Image = "juju-operator:6.6.6"
-	gomock.InOrder(
-		s.mockStatefulSets.EXPECT().Get("controller", v1.GetOptions{}).
-			Return(&ss, nil),
-		s.mockStatefulSets.EXPECT().Update(&updated).
-			Return(nil, nil),
-	)
-
-	err := s.broker.Upgrade("controller", version.MustParse("6.6.6"))
-	c.Assert(err, jc.ErrorIsNil)
-}
-
-func (s *K8sBrokerSuite) TestUpgradeNotSupported(c *gc.C) {
-	ctrl := s.setupController(c)
-	defer ctrl.Finish()
-
-	gomock.InOrder(
-		s.mockStatefulSets.EXPECT().Get("juju-operator-test-app", v1.GetOptions{}).
-			Return(nil, s.k8sNotFoundError()),
-		s.mockStatefulSets.EXPECT().Get("test-app-operator", v1.GetOptions{}).
-			Return(nil, s.k8sNotFoundError()),
-	)
-
-	err := s.broker.Upgrade("test-app", version.MustParse("6.6.6"))
-	c.Assert(err, jc.Satisfies, errors.IsNotSupported)
 }
 
 func initContainers() []core.Container {

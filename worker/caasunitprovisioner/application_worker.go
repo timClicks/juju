@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/juju/errors"
-	"gopkg.in/juju/names.v3"
-	"gopkg.in/juju/worker.v1"
-	"gopkg.in/juju/worker.v1/catacomb"
+	"github.com/juju/names/v4"
+	"github.com/juju/worker/v2"
+	"github.com/juju/worker/v2/catacomb"
 
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/caas"
@@ -98,8 +98,8 @@ func (aw *applicationWorker) loop() error {
 		brokerUnitsWatcher watcher.NotifyWatcher
 		brokerUnitsChannel watcher.NotifyChannel
 
-		appOperatorWatcher  watcher.NotifyWatcher
-		appOpertatorChannel watcher.NotifyChannel
+		appOperatorWatcher watcher.NotifyWatcher
+		appOperatorChannel watcher.NotifyChannel
 
 		appDeploymentWatcher watcher.NotifyWatcher
 		appDeploymentChannel watcher.NotifyChannel
@@ -148,7 +148,7 @@ func (aw *applicationWorker) loop() error {
 				}
 				return errors.Annotatef(err, "failed to start operator watcher for %q", aw.application)
 			}
-			appOpertatorChannel = appOperatorWatcher.Changes()
+			appOperatorChannel = appOperatorWatcher.Changes()
 		}
 		if appDeploymentWatcher == nil {
 			appDeploymentWatcher, err = aw.serviceBroker.WatchService(aw.application, aw.mode)
@@ -230,7 +230,7 @@ func (aw *applicationWorker) loop() error {
 			if err := aw.clusterChanged(service, lastReportedStatus, true); err != nil {
 				return errors.Trace(err)
 			}
-		case _, ok := <-appOpertatorChannel:
+		case _, ok := <-appOperatorChannel:
 			if !ok {
 				logger.Debugf("%v", appOperatorWatcher.Wait())
 				worker.Stop(appOperatorWatcher)

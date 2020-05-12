@@ -4,9 +4,9 @@
 package uniter_test
 
 import (
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api/uniter"
 	"github.com/juju/juju/apiserver/params"
@@ -110,7 +110,7 @@ func (s *settingsSuite) TestWrite(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	apiRelation, err := s.uniter.Relation(s.stateRelation.Tag().(names.RelationTag))
 	c.Assert(err, jc.ErrorIsNil)
-	apiRelUnit, err := apiRelation.Unit(apiUnit)
+	apiRelUnit, err := apiRelation.Unit(apiUnit.Tag())
 	c.Assert(err, jc.ErrorIsNil)
 	settings, err := apiRelUnit.Settings()
 	c.Assert(err, jc.ErrorIsNil)

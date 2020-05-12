@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	"github.com/juju/testing"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/facades/controller/instancepoller"
 	"github.com/juju/juju/core/instance"
@@ -424,7 +424,7 @@ func (m *mockMachine) Status() (status.StatusInfo, error) {
 }
 
 type mockLinkLayerDeviceAddress struct {
-	configMethod     state.AddressConfigMethod
+	configMethod     network.AddressConfigMethod
 	subnetCIDR       string
 	dnsServers       []string
 	dnsSearchDomains []string
@@ -433,13 +433,13 @@ type mockLinkLayerDeviceAddress struct {
 	value            string
 }
 
-func (m mockLinkLayerDeviceAddress) ConfigMethod() state.AddressConfigMethod { return m.configMethod }
-func (m mockLinkLayerDeviceAddress) SubnetCIDR() string                      { return m.subnetCIDR }
-func (m mockLinkLayerDeviceAddress) DNSServers() []string                    { return m.dnsServers }
-func (m mockLinkLayerDeviceAddress) DNSSearchDomains() []string              { return m.dnsSearchDomains }
-func (m mockLinkLayerDeviceAddress) GatewayAddress() string                  { return m.gatewayAddress }
-func (m mockLinkLayerDeviceAddress) IsDefaultGateway() bool                  { return m.isDefaultGateway }
-func (m mockLinkLayerDeviceAddress) Value() string                           { return m.value }
+func (m mockLinkLayerDeviceAddress) ConfigMethod() network.AddressConfigMethod { return m.configMethod }
+func (m mockLinkLayerDeviceAddress) SubnetCIDR() string                        { return m.subnetCIDR }
+func (m mockLinkLayerDeviceAddress) DNSServers() []string                      { return m.dnsServers }
+func (m mockLinkLayerDeviceAddress) DNSSearchDomains() []string                { return m.dnsSearchDomains }
+func (m mockLinkLayerDeviceAddress) GatewayAddress() string                    { return m.gatewayAddress }
+func (m mockLinkLayerDeviceAddress) IsDefaultGateway() bool                    { return m.isDefaultGateway }
+func (m mockLinkLayerDeviceAddress) Value() string                             { return m.value }
 
 type mockLinkLayerDevice struct {
 	name             string

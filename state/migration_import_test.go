@@ -9,16 +9,16 @@ import (
 	"time" // only uses time.Time values
 
 	"github.com/golang/mock/gomock"
-	"github.com/juju/description"
+	"github.com/juju/charm/v7"
+	"github.com/juju/description/v2"
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	"github.com/juju/utils/arch"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/environschema.v1"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/yaml.v2"
 
 	"github.com/juju/juju/core/constraints"
@@ -27,7 +27,6 @@ import (
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
-	corenetwork "github.com/juju/juju/core/network"
 	networktesting "github.com/juju/juju/core/network/testing"
 	"github.com/juju/juju/core/permission"
 	"github.com/juju/juju/core/status"
@@ -362,7 +361,7 @@ func (s *MigrationImportSuite) TestMachines(c *gc.C) {
 		Characteristics: &instance.HardwareCharacteristics{
 			RootDiskSource: &source,
 		},
-		Addresses: corenetwork.SpaceAddresses{addr},
+		Addresses: network.SpaceAddresses{addr},
 	})
 	err := s.Model.SetAnnotations(machine1, testAnnotations)
 	c.Assert(err, jc.ErrorIsNil)
@@ -478,7 +477,7 @@ func (s *MigrationImportSuite) testMachinePortOps(c *gc.C, setup, validate strin
 	c.Assert(ops[0].Id, gc.Equals, fmt.Sprintf("m#3#%s", validate))
 }
 
-//go:generate mockgen -package mocks -destination mocks/description_mock.go github.com/juju/description Machine,OpenedPorts
+//go:generate go run github.com/golang/mock/mockgen -package mocks -destination mocks/description_mock.go github.com/juju/description Machine,OpenedPorts
 func setupMockOpenedPorts(c *gc.C, mID, subnetID string) (*gomock.Controller, *mocks.MockMachine) {
 	ctrl := gomock.NewController(c)
 	mockMachine := mocks.NewMockMachine(ctrl)
@@ -708,6 +707,7 @@ func (s *MigrationImportSuite) TestCAASApplications(c *gc.C) {
 	c.Assert(cloudService.Addresses(), jc.DeepEquals, network.SpaceAddresses{addr})
 	c.Assert(newApp.GetScale(), gc.Equals, 3)
 	c.Assert(newApp.GetPlacement(), gc.Equals, "")
+	c.Assert(state.GetApplicationHasResources(newApp), jc.IsTrue)
 }
 
 func (s *MigrationImportSuite) TestCAASApplicationStatus(c *gc.C) {
@@ -1630,7 +1630,7 @@ func (s *MigrationImportSuite) TestIPAddress(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	args := state.LinkLayerDeviceAddress{
 		DeviceName:       "foo",
-		ConfigMethod:     state.StaticAddress,
+		ConfigMethod:     network.StaticAddress,
 		CIDRAddress:      "0.1.2.3/24",
 		ProviderID:       "bar",
 		DNSServers:       []string{"bam", "mam"},
@@ -1649,7 +1649,7 @@ func (s *MigrationImportSuite) TestIPAddress(c *gc.C) {
 	c.Assert(addr.Value(), gc.Equals, "0.1.2.3")
 	c.Assert(addr.MachineID(), gc.Equals, machine.Id())
 	c.Assert(addr.DeviceName(), gc.Equals, "foo")
-	c.Assert(addr.ConfigMethod(), gc.Equals, state.StaticAddress)
+	c.Assert(addr.ConfigMethod(), gc.Equals, network.StaticAddress)
 	c.Assert(addr.SubnetCIDR(), gc.Equals, "0.1.2.0/24")
 	c.Assert(addr.ProviderID(), gc.Equals, network.Id("bar"))
 	c.Assert(addr.DNSServers(), jc.DeepEquals, []string{"bam", "mam"})
@@ -2240,12 +2240,12 @@ func (s *MigrationImportSuite) TestRemoteApplications(c *gc.C) {
 			Scope:     charm.ScopeGlobal,
 		}},
 		Spaces: []*environs.ProviderSpaceInfo{{
-			SpaceInfo: corenetwork.SpaceInfo{
+			SpaceInfo: network.SpaceInfo{
 				Name:       "unicorns",
-				ProviderId: corenetwork.Id("space-provider-id"),
-				Subnets: []corenetwork.SubnetInfo{{
+				ProviderId: "space-provider-id",
+				Subnets: []network.SubnetInfo{{
 					CIDR:              "10.0.1.0/24",
-					ProviderId:        corenetwork.Id("subnet-provider-id"),
+					ProviderId:        "subnet-provider-id",
 					AvailabilityZones: []string{"eu-west-1"},
 				}},
 			},

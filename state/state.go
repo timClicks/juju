@@ -15,19 +15,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juju/charm/v7"
+	csparams "github.com/juju/charmrepo/v5/csclient/params"
 	"github.com/juju/clock"
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/os"
 	"github.com/juju/os/series"
 	"github.com/juju/pubsub"
 	jujutxn "github.com/juju/txn"
 	"github.com/juju/utils"
 	"github.com/juju/version"
-	"gopkg.in/juju/charm.v6"
-	csparams "gopkg.in/juju/charmrepo.v4/csclient/params"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
@@ -42,7 +42,6 @@ import (
 	"github.com/juju/juju/core/permission"
 	"github.com/juju/juju/core/raftlease"
 	"github.com/juju/juju/core/status"
-	"github.com/juju/juju/feature"
 	"github.com/juju/juju/mongo"
 	"github.com/juju/juju/state/cloudimagemetadata"
 	"github.com/juju/juju/state/globalclock"
@@ -455,11 +454,8 @@ func (st *State) start(controllerTag names.ControllerTag, hub *pubsub.SimpleHub)
 // ApplicationLeaders returns a map of the application name to the
 // unit name that is the current leader.
 func (st *State) ApplicationLeaders() (map[string]string, error) {
-	config, err := st.ControllerConfig()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if !config.Features().Contains(feature.LegacyLeases) {
+	// TODO(legacy-leases): remove this.
+	if true {
 		return raftleasestore.LeaseHolders(
 			&environMongo{st},
 			leaseHoldersC,
@@ -467,6 +463,7 @@ func (st *State) ApplicationLeaders() (map[string]string, error) {
 			st.ModelUUID(),
 		)
 	}
+
 	store, err := st.getLeadershipLeaseStore()
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -1237,12 +1234,14 @@ func (st *State) AddApplication(args AddApplicationArgs) (_ *Application, err er
 	// Perform model specific arg processing.
 	scale := 0
 	placement := ""
+	hasResources := false
 	switch model.Type() {
 	case ModelTypeIAAS:
 		if err := st.processIAASModelApplicationArgs(&args); err != nil {
 			return nil, errors.Trace(err)
 		}
 	case ModelTypeCAAS:
+		hasResources = true // all k8s apps start with the assumption of resources
 		if err := st.processCAASModelApplicationArgs(&args); err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -1273,6 +1272,7 @@ func (st *State) AddApplication(args AddApplicationArgs) (_ *Application, err er
 		// CAAS
 		DesiredScale: scale,
 		Placement:    placement,
+		HasResources: hasResources,
 	}
 
 	app := newApplication(st, appDoc)

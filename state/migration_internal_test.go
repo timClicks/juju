@@ -4,9 +4,9 @@
 package state
 
 import (
+	"github.com/juju/charm/v7"
 	"github.com/juju/collections/set"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
 
 	"github.com/juju/juju/testing"
 )
@@ -325,6 +325,8 @@ func (s *MigrationSuite) TestMachineDocFields(c *gc.C) {
 		"ModelUUID",
 		// Life is always alive, confirmed by export precheck.
 		"Life",
+		// ForceDestroyed is only true for dying/dead machines.
+		"ForceDestroyed",
 		// Ignored at this stage, could be an issue if mongo 3.0 isn't
 		// available.
 		"StopMongoUntilVersion",
@@ -414,6 +416,7 @@ func (s *MigrationSuite) TestApplicationDocFields(c *gc.C) {
 		"Tools",
 		"DesiredScale",
 		"Placement",
+		"HasResources",
 	)
 	s.AssertExportedFields(c, applicationDoc{}, migrated.Union(ignored))
 }
@@ -689,6 +692,7 @@ func (s *MigrationSuite) TestIPAddressDocFields(c *gc.C) {
 		"SubnetCIDR",
 		"ConfigMethod",
 		"Value",
+		"Origin",
 	)
 	s.AssertExportedFields(c, ipAddressDoc{}, migrated.Union(ignored))
 }

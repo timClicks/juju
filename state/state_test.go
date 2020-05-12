@@ -11,10 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/clock"
 	"github.com/juju/clock/testclock"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/os/series"
 	gitjujutesting "github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
@@ -23,8 +25,6 @@ import (
 	"github.com/juju/utils/arch"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	mgotxn "gopkg.in/mgo.v2/txn"
@@ -1536,6 +1536,7 @@ func (s *StateSuite) TestAddApplication(c *gc.C) {
 		state.AddApplicationArgs{Name: "wordpress", Charm: ch, CharmConfig: insettings, ApplicationConfig: inconfig})
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(wordpress.Name(), gc.Equals, "wordpress")
+	c.Assert(state.GetApplicationHasResources(wordpress), jc.IsFalse)
 	outsettings, err := wordpress.CharmConfig(model.GenerationMaster)
 	c.Assert(err, jc.ErrorIsNil)
 	expected := ch.Config().DefaultSettings()
@@ -1585,6 +1586,7 @@ func (s *StateSuite) TestAddCAASApplication(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(gitlab.Name(), gc.Equals, "gitlab")
 	c.Assert(gitlab.GetScale(), gc.Equals, 0)
+	c.Assert(state.GetApplicationHasResources(gitlab), jc.IsTrue)
 	outsettings, err := gitlab.CharmConfig(model.GenerationMaster)
 	c.Assert(err, jc.ErrorIsNil)
 	expected := ch.Config().DefaultSettings()

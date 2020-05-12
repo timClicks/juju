@@ -7,18 +7,17 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 
+	corecharm "github.com/juju/charm/v7"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
 	jc "github.com/juju/testing/checkers"
 	ft "github.com/juju/testing/filetesting"
 	gc "gopkg.in/check.v1"
-	corecharm "gopkg.in/juju/charm.v6"
 
 	"github.com/juju/juju/agent/tools"
 	"github.com/juju/juju/apiserver/params"
@@ -57,12 +56,9 @@ func (s *UniterSuite) SetUpSuite(c *gc.C) {
 	toolsDir := tools.ToolsDir(s.dataDir, "unit-u-0")
 	err := os.MkdirAll(toolsDir, 0755)
 	c.Assert(err, jc.ErrorIsNil)
-	// TODO(fwereade) GAAAAAAAAAAAAAAAAAH this is LUDICROUS.
-	cmd := exec.Command(jujudBuildArgs[0], jujudBuildArgs[1:]...)
-	cmd.Dir = toolsDir
-	out, err := cmd.CombinedOutput()
-	c.Logf(string(out))
-	c.Assert(err, jc.ErrorIsNil)
+
+	coretesting.CopyOrBuildJujuBins(c, toolsDir, "jujud", "jujuc")
+
 	s.oldLcAll = os.Getenv("LC_ALL")
 	os.Setenv("LC_ALL", "en_US")
 	s.unitDir = filepath.Join(s.dataDir, "agents", "unit-u-0")

@@ -6,11 +6,11 @@ package mocks
 
 import (
 	gomock "github.com/golang/mock/gomock"
+	charm "github.com/juju/charm/v7"
 	uniter "github.com/juju/juju/api/uniter"
 	params "github.com/juju/juju/apiserver/params"
 	status "github.com/juju/juju/core/status"
-	charm_v6 "gopkg.in/juju/charm.v6"
-	names_v3 "gopkg.in/juju/names.v3"
+	names "github.com/juju/names/v4"
 	reflect "reflect"
 )
 
@@ -95,10 +95,10 @@ func (mr *MockHookUnitMockRecorder) CommitHookChanges(arg0 interface{}) *gomock.
 }
 
 // ConfigSettings mocks base method
-func (m *MockHookUnit) ConfigSettings() (charm_v6.Settings, error) {
+func (m *MockHookUnit) ConfigSettings() (charm.Settings, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ConfigSettings")
-	ret0, _ := ret[0].(charm_v6.Settings)
+	ret0, _ := ret[0].(charm.Settings)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -110,7 +110,7 @@ func (mr *MockHookUnitMockRecorder) ConfigSettings() *gomock.Call {
 }
 
 // LogActionMessage mocks base method
-func (m *MockHookUnit) LogActionMessage(arg0 names_v3.ActionTag, arg1 string) error {
+func (m *MockHookUnit) LogActionMessage(arg0 names.ActionTag, arg1 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LogActionMessage", arg0, arg1)
 	ret0, _ := ret[0].(error)
@@ -180,6 +180,20 @@ func (mr *MockHookUnitMockRecorder) RequestReboot() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestReboot", reflect.TypeOf((*MockHookUnit)(nil).RequestReboot))
 }
 
+// SetAgentStatus mocks base method
+func (m *MockHookUnit) SetAgentStatus(arg0 status.Status, arg1 string, arg2 map[string]interface{}) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetAgentStatus", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetAgentStatus indicates an expected call of SetAgentStatus
+func (mr *MockHookUnitMockRecorder) SetAgentStatus(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAgentStatus", reflect.TypeOf((*MockHookUnit)(nil).SetAgentStatus), arg0, arg1, arg2)
+}
+
 // SetUnitStatus mocks base method
 func (m *MockHookUnit) SetUnitStatus(arg0 status.Status, arg1 string, arg2 map[string]interface{}) error {
 	m.ctrl.T.Helper()
@@ -210,10 +224,10 @@ func (mr *MockHookUnitMockRecorder) State() *gomock.Call {
 }
 
 // Tag mocks base method
-func (m *MockHookUnit) Tag() names_v3.UnitTag {
+func (m *MockHookUnit) Tag() names.UnitTag {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Tag")
-	ret0, _ := ret[0].(names_v3.UnitTag)
+	ret0, _ := ret[0].(names.UnitTag)
 	return ret0
 }
 

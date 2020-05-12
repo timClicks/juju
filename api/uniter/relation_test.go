@@ -6,10 +6,10 @@ package uniter_test
 import (
 	"time"
 
+	"github.com/juju/charm/v7"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api/leadership"
 	"github.com/juju/juju/api/uniter"
@@ -117,12 +117,9 @@ func (s *relationSuite) TestEndpoint(c *gc.C) {
 }
 
 func (s *relationSuite) TestUnit(c *gc.C) {
-	_, err := s.apiRelation.Unit(nil)
-	c.Assert(err, gc.ErrorMatches, "unit is nil")
-
 	apiUnit, err := s.uniter.Unit(names.NewUnitTag("wordpress/0"))
 	c.Assert(err, jc.ErrorIsNil)
-	apiRelUnit, err := s.apiRelation.Unit(apiUnit)
+	apiRelUnit, err := s.apiRelation.Unit(apiUnit.Tag())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(apiRelUnit, gc.NotNil)
 	// We just ensure we get the correct type, more tests

@@ -5,14 +5,15 @@ package state
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"github.com/juju/charm/v7"
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	jujutxn "github.com/juju/txn"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
@@ -90,14 +91,8 @@ func NewStorageBackend(st *State) (*storageBackend, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	registry, err := st.storageProviderRegistry()
-	if err != nil {
-		return nil, errors.Annotate(err, "getting storage provider registry")
-	}
-
-	return &storageBackend{
+	sb := &storageBackend{
 		mb:              st,
-		registry:        registry,
 		settings:        NewStateSettings(st),
 		modelType:       m.Type(),
 		config:          m.ModelConfig,
@@ -105,7 +100,11 @@ func NewStorageBackend(st *State) (*storageBackend, error) {
 		allApplications: st.AllApplications,
 		unit:            st.Unit,
 		machine:         st.Machine,
-	}, nil
+	}
+	sb.registryInit = func() {
+		sb.spRegistry, sb.spRegistryErr = st.storageProviderRegistry()
+	}
+	return sb, nil
 }
 
 type storageBackend struct {
@@ -117,8 +116,12 @@ type storageBackend struct {
 	machine         func(string) (*Machine, error)
 
 	modelType ModelType
-	registry  storage.ProviderRegistry
 	settings  *StateSettings
+
+	spRegistry    storage.ProviderRegistry
+	spRegistryErr error
+	registryOnce  sync.Once
+	registryInit  func()
 }
 
 type storageInstance struct {
@@ -264,6 +267,11 @@ func storageAttachmentId(unit string, storageInstanceId string) string {
 	return fmt.Sprintf("%s#%s", unitGlobalKey(unit), storageInstanceId)
 }
 
+func (sb *storageBackend) registry() (storage.ProviderRegistry, error) {
+	sb.registryOnce.Do(sb.registryInit)
+	return sb.spRegistry, sb.spRegistryErr
+}
+
 // StorageInstance returns the StorageInstance with the specified tag.
 func (sb *storageBackend) StorageInstance(tag names.StorageTag) (StorageInstance, error) {
 	s, err := sb.storageInstance(tag)
@@ -329,7 +337,11 @@ func (sb *storageBackend) RemoveStoragePool(poolName string) error {
 		return errors.Errorf("storage pool %q in use", poolName)
 	}
 
-	pm := poolmanager.New(sb.settings, sb.registry)
+	registry, err := sb.registry()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	pm := poolmanager.New(sb.settings, registry)
 	return pm.Delete(poolName)
 }
 
@@ -565,7 +577,7 @@ func removeStorageInstanceOps(si *storageInstance, assert bson.D, force bool) ([
 		ops = append(ops, machineStorageOp(
 			filesystemsC, filesystem.Tag().Id(),
 		))
-		fsOps, err := destroyFilesystemOps(si.sb, filesystem, si.doc.Releasing, nil)
+		fsOps, err := destroyFilesystemOps(si.sb, filesystem, si.doc.Releasing, force, nil)
 		if err != nil {
 			if !force {
 				return nil, errors.Trace(err)
@@ -590,7 +602,7 @@ func removeStorageInstanceOps(si *storageInstance, assert bson.D, force bool) ([
 		// this case, we want to destroy only the filesystem; when
 		// the filesystem is removed, the volume will be destroyed.
 		if !haveFilesystem {
-			volOps, err := destroyVolumeOps(si.sb, volume, si.doc.Releasing, nil)
+			volOps, err := destroyVolumeOps(si.sb, volume, si.doc.Releasing, force, nil)
 			if err != nil {
 				if !force {
 					return nil, errors.Trace(err)
@@ -1480,7 +1492,7 @@ func removeStorageAttachmentOps(
 
 	// If the storage instance has an associated volume or
 	// filesystem, detach the volume/filesystem too.
-	detachOps, err := im.detachStorageAttachmentOps(si, s.Unit())
+	detachOps, err := im.detachStorageAttachmentOps(si, s.Unit(), force)
 	if err != nil {
 		if !force {
 			return nil, errors.Trace(err)
@@ -1492,7 +1504,7 @@ func removeStorageAttachmentOps(
 	return ops, nil
 }
 
-func (sb *storageBackend) detachStorageAttachmentOps(si *storageInstance, unitTag names.UnitTag) ([]txn.Op, error) {
+func (sb *storageBackend) detachStorageAttachmentOps(si *storageInstance, unitTag names.UnitTag, force bool) ([]txn.Op, error) {
 	unit, err := sb.unit(unitTag.Id())
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -1559,14 +1571,19 @@ func (sb *storageBackend) detachStorageAttachmentOps(si *storageInstance, unitTa
 			return nil, nil
 		}
 
+		lifeAssert := isAliveDoc
+		if force {
+			// Since we are force destroying, life assert should be current volume's life.
+			lifeAssert = bson.D{{"life", volume.Life()}}
+		}
 		if plans, err := sb.machineVolumeAttachmentPlans(hostTag, volume.VolumeTag()); err != nil {
 			return nil, errors.Trace(err)
 		} else {
 			if len(plans) > 0 {
-				return detachStorageAttachmentOps(hostTag, volume.VolumeTag()), nil
+				return detachStorageAttachmentOps(hostTag, volume.VolumeTag(), lifeAssert), nil
 			}
 		}
-		return detachVolumeOps(hostTag, volume.VolumeTag()), nil
+		return detachVolumeOps(hostTag, volume.VolumeTag(), lifeAssert), nil
 
 	case StorageKindFilesystem:
 		filesystem, err := sb.storageInstanceFilesystem(si.StorageTag())
@@ -1883,13 +1900,17 @@ func validateStoragePool(
 }
 
 func poolStorageProvider(sb *storageBackend, poolName string) (storage.ProviderType, storage.Provider, map[string]interface{}, error) {
-	poolManager := poolmanager.New(sb.settings, sb.registry)
+	registry, err := sb.registry()
+	if err != nil {
+		return "", nil, nil, errors.Trace(err)
+	}
+	poolManager := poolmanager.New(sb.settings, registry)
 	pool, err := poolManager.Get(poolName)
 	if errors.IsNotFound(err) {
 		// If there's no pool called poolName, maybe a provider type
 		// has been specified directly.
 		providerType := storage.ProviderType(poolName)
-		aProvider, err1 := sb.registry.StorageProvider(providerType)
+		aProvider, err1 := registry.StorageProvider(providerType)
 		if err1 != nil {
 			// The name can't be resolved as a storage provider type,
 			// so return the original "pool not found" error.
@@ -1900,7 +1921,7 @@ func poolStorageProvider(sb *storageBackend, poolName string) (storage.ProviderT
 		return "", nil, nil, errors.Trace(err)
 	}
 	providerType := pool.Provider()
-	aProvider, err := sb.registry.StorageProvider(providerType)
+	aProvider, err := registry.StorageProvider(providerType)
 	if err != nil {
 		return "", nil, nil, errors.Trace(err)
 	}

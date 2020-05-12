@@ -15,9 +15,9 @@ import (
 	"github.com/juju/pubsub"
 	"github.com/juju/utils/voyeur"
 	"github.com/juju/version"
+	"github.com/juju/worker/v2"
+	"github.com/juju/worker/v2/dependency"
 	"github.com/prometheus/client_golang/prometheus"
-	"gopkg.in/juju/worker.v1"
-	"gopkg.in/juju/worker.v1/dependency"
 
 	coreagent "github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
@@ -31,7 +31,6 @@ import (
 	"github.com/juju/juju/core/machinelock"
 	"github.com/juju/juju/core/presence"
 	"github.com/juju/juju/core/raftlease"
-	"github.com/juju/juju/feature"
 	"github.com/juju/juju/state"
 	proxyconfig "github.com/juju/juju/utils/proxy"
 	jworker "github.com/juju/juju/worker"
@@ -553,6 +552,7 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 			ValidateMigration: config.ValidateMigration,
 			NewFacade:         migrationminion.NewFacade,
 			NewWorker:         migrationminion.NewWorker,
+			Logger:            loggo.GetLogger("juju.worker.migrationminion"),
 		}),
 
 		// We also run another clock updater to feed time updates into
@@ -909,6 +909,7 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 		apiAddressUpdaterName: ifNotMigrating(apiaddressupdater.Manifold(apiaddressupdater.ManifoldConfig{
 			AgentName:     agentName,
 			APICallerName: apiCallerName,
+			Logger:        loggo.GetLogger("juju.worker.apiaddressupdater"),
 		})),
 
 		machineActionName: ifNotMigrating(machineactions.Manifold(machineactions.ManifoldConfig{
@@ -918,9 +919,10 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 			NewWorker:     machineactions.NewMachineActionsWorker,
 		})),
 
+		// TODO(legacy-leases): remove this.
 		legacyLeasesFlagName: ifController(featureflag.Manifold(featureflag.ManifoldConfig{
 			StateName: stateName,
-			FlagName:  feature.LegacyLeases,
+			FlagName:  "legacy-leases-always-off",
 			Logger:    loggo.GetLogger("juju.worker.legacyleasesenabled"),
 			NewWorker: featureflag.NewWorker,
 		})),

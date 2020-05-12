@@ -7,15 +7,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/juju/charm/v7/hooks"
 	"github.com/juju/clock/testclock"
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	"github.com/juju/utils/fs"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6/hooks"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/apiserver/params"
@@ -109,7 +109,7 @@ func (s *ContextFactorySuite) getRelationInfos() map[int]*context.RelationInfo {
 	info := map[int]*context.RelationInfo{}
 	for relId, relUnit := range s.apiRelunits {
 		info[relId] = &context.RelationInfo{
-			RelationUnit: relUnit,
+			RelationUnit: &relUnitShim{relUnit},
 			MemberNames:  s.membership[relId],
 		}
 	}
@@ -821,7 +821,7 @@ func (s *ContextFactorySuite) TestReadApplicationSettings(c *gc.C) {
 	rel, err := ctx.Relation(0)
 	c.Assert(err, jc.ErrorIsNil)
 	_, err = rel.ApplicationSettings()
-	c.Assert(err, gc.ErrorMatches, "permission denied")
+	c.Assert(err, gc.ErrorMatches, "permission denied.*")
 	// Now claim leadership and try again
 	claimer, err := s.LeaseManager.Claimer("application-leadership", s.State.ModelUUID())
 	c.Assert(err, jc.ErrorIsNil)

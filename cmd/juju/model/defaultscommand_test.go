@@ -9,9 +9,9 @@ import (
 
 	"github.com/juju/cmd"
 	"github.com/juju/cmd/cmdtesting"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/cloud"
@@ -322,6 +322,24 @@ func (s *DefaultsCommandSuite) TestSet(c *gc.C) {
 			Value: "another-value",
 		}}},
 		"special": {Controller: "extra", Default: nil, Regions: nil},
+	})
+}
+
+func (s *DefaultsCommandSuite) TestSetValueWithSlash(c *gc.C) {
+	// A value with a "/" might be interpreted as a cloud/region.
+	_, err := s.run(c, `juju-no-proxy="localhost,127.0.0.1,127.0.0.53,10.0.8.0/24"`)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(s.fakeDefaultsAPI.cloud, gc.Equals, "dummy")
+	c.Assert(s.fakeDefaultsAPI.defaults, jc.DeepEquals, config.ModelDefaultAttributes{
+		"attr": {Controller: nil, Default: "foo", Regions: nil},
+		"attr2": {Controller: "bar", Default: nil, Regions: []config.RegionDefaultValue{{
+			Name:  "dummy-region",
+			Value: "dummy-value",
+		}, {
+			Name:  "another-region",
+			Value: "another-value",
+		}}},
+		"juju-no-proxy": {Controller: "localhost,127.0.0.1,127.0.0.53,10.0.8.0/24", Default: nil, Regions: nil},
 	})
 }
 

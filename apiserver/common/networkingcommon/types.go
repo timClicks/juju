@@ -8,7 +8,7 @@ import (
 
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
-	"gopkg.in/juju/names.v3"
+	"github.com/juju/names/v4"
 
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/params"
@@ -176,7 +176,7 @@ func NetworkInterfacesToStateArgs(ifaces []corenetwork.InterfaceInfo) (
 			args := state.LinkLayerDeviceArgs{
 				Name:        iface.InterfaceName,
 				MTU:         mtu,
-				ProviderID:  corenetwork.Id(iface.ProviderId),
+				ProviderID:  iface.ProviderId,
 				Type:        corenetwork.LinkLayerDeviceType(iface.InterfaceType),
 				MACAddress:  iface.MACAddress,
 				IsAutoStart: !iface.NoAutoStart,
@@ -207,22 +207,22 @@ func NetworkInterfacesToStateArgs(ifaces []corenetwork.InterfaceInfo) (
 		ipNet.IP = ipAddr
 		cidrAddress := ipNet.String()
 
-		var derivedConfigMethod state.AddressConfigMethod
-		switch method := state.AddressConfigMethod(iface.ConfigType); method {
-		case state.StaticAddress, state.DynamicAddress,
-			state.LoopbackAddress, state.ManualAddress:
+		var derivedConfigMethod corenetwork.AddressConfigMethod
+		switch method := corenetwork.AddressConfigMethod(iface.ConfigType); method {
+		case corenetwork.StaticAddress, corenetwork.DynamicAddress,
+			corenetwork.LoopbackAddress, corenetwork.ManualAddress:
 			derivedConfigMethod = method
 		case "dhcp": // awkward special case
-			derivedConfigMethod = state.DynamicAddress
+			derivedConfigMethod = corenetwork.DynamicAddress
 		default:
-			derivedConfigMethod = state.StaticAddress
+			derivedConfigMethod = corenetwork.StaticAddress
 		}
 
 		addr := state.LinkLayerDeviceAddress{
 			DeviceName:        iface.InterfaceName,
-			ProviderID:        corenetwork.Id(iface.ProviderAddressId),
-			ProviderNetworkID: corenetwork.Id(iface.ProviderNetworkId),
-			ProviderSubnetID:  corenetwork.Id(iface.ProviderSubnetId),
+			ProviderID:        iface.ProviderAddressId,
+			ProviderNetworkID: iface.ProviderNetworkId,
+			ProviderSubnetID:  iface.ProviderSubnetId,
 			ConfigMethod:      derivedConfigMethod,
 			CIDRAddress:       cidrAddress,
 			DNSServers:        iface.DNSServers.ToIPAddresses(),

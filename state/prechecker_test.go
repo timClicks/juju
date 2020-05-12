@@ -7,9 +7,9 @@ import (
 	"fmt"
 
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/core/constraints"
@@ -218,9 +218,9 @@ func (s *PrecheckerSuite) TestPrecheckAddApplication(c *gc.C) {
 		c.Assert(err, jc.ErrorIsNil)
 	}
 	for _, volumeTag := range volumeTags {
-		err = sb.DetachVolume(machineTag, volumeTag)
+		err = sb.DetachVolume(machineTag, volumeTag, false)
 		c.Assert(err, jc.ErrorIsNil)
-		err = sb.RemoveVolumeAttachment(machineTag, volumeTag)
+		err = sb.RemoveVolumeAttachment(machineTag, volumeTag, false)
 		c.Assert(err, jc.ErrorIsNil)
 	}
 

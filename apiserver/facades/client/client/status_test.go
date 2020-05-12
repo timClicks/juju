@@ -6,10 +6,10 @@ package client_test
 import (
 	"time"
 
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/names.v3"
 
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/apiserver/common"
@@ -193,14 +193,14 @@ func (s *statusSuite) TestFullStatusInterfaceScaling(c *gc.C) {
 	err = machine.SetDevicesAddresses(
 		state.LinkLayerDeviceAddress{
 			DeviceName:        "eth1",
-			ConfigMethod:      state.StaticAddress,
+			ConfigMethod:      network.StaticAddress,
 			ProviderNetworkID: "vpc-abcd",
 			ProviderSubnetID:  "prov-ffff",
 			CIDRAddress:       "10.20.0.42/24",
 		},
 		state.LinkLayerDeviceAddress{
 			DeviceName:        "eth2",
-			ConfigMethod:      state.StaticAddress,
+			ConfigMethod:      network.StaticAddress,
 			ProviderNetworkID: "vpc-abcd",
 			ProviderSubnetID:  "prov-abcd",
 			CIDRAddress:       "10.30.0.99/24",
@@ -246,7 +246,7 @@ func (s *statusSuite) createNICWithIP(c *gc.C, machine *state.Machine, deviceNam
 		state.LinkLayerDeviceAddress{
 			DeviceName:   deviceName,
 			CIDRAddress:  cidrAddress,
-			ConfigMethod: state.StaticAddress,
+			ConfigMethod: network.StaticAddress,
 		},
 	)
 	c.Assert(err, jc.ErrorIsNil)

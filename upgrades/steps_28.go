@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/juju/errors"
+	"github.com/juju/names/v4"
 	"github.com/juju/utils"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/yaml.v2"
 
 	"github.com/juju/collections/set"
@@ -48,6 +48,13 @@ func stateStepsFor28() []Step {
 			targets:     []Target{DatabaseMaster},
 			run: func(context Context) error {
 				return context.State().AddMachineIDToSubordinates()
+			},
+		},
+		&upgradeStep{
+			description: "add origin to ip addresses",
+			targets:     []Target{DatabaseMaster},
+			run: func(context Context) error {
+				return context.State().AddOriginToIPAddresses()
 			},
 		},
 	}
@@ -140,7 +147,7 @@ var getUpgradeStepsClient = func(caller base.APICaller) UpgradeStepsClient {
 	return upgradesteps.NewClient(caller)
 }
 
-//go:generate mockgen -package mocks -destination mocks/upgradestepsclient_mock.go github.com/juju/juju/upgrades UpgradeStepsClient
+//go:generate go run github.com/golang/mock/mockgen -package mocks -destination mocks/upgradestepsclient_mock.go github.com/juju/juju/upgrades UpgradeStepsClient
 type UpgradeStepsClient interface {
 	WriteAgentState([]params.SetUnitStateArg) error
 }

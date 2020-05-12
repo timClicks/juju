@@ -20,7 +20,7 @@ import (
 	"github.com/juju/juju/storage"
 )
 
-//go:generate mockgen -package testing -destination testing/package_mock.go github.com/juju/juju/environs EnvironProvider,CloudEnvironProvider,ProviderSchema,ProviderCredentials,FinalizeCredentialContext,FinalizeCloudContext,CloudFinalizer,CloudDetector,CloudRegionDetector,ModelConfigUpgrader,ConfigGetter,CloudDestroyer,Environ,InstancePrechecker,Firewaller,InstanceTagger,InstanceTypesFetcher,Upgrader,UpgradeStep,DefaultConstraintsChecker,ProviderCredentialsRegister,RequestFinalizeCredential,NetworkingEnviron
+//go:generate go run github.com/golang/mock/mockgen -package testing -destination testing/package_mock.go github.com/juju/juju/environs EnvironProvider,CloudEnvironProvider,ProviderSchema,ProviderCredentials,FinalizeCredentialContext,FinalizeCloudContext,CloudFinalizer,CloudDetector,CloudRegionDetector,ModelConfigUpgrader,ConfigGetter,CloudDestroyer,Environ,InstancePrechecker,Firewaller,InstanceTagger,InstanceTypesFetcher,Upgrader,UpgradeStep,DefaultConstraintsChecker,ProviderCredentialsRegister,RequestFinalizeCredential,NetworkingEnviron
 
 // A EnvironProvider represents a computing and storage provider
 // for either a traditional cloud or a container substrate like k8s.
@@ -545,6 +545,44 @@ type UpgradeStep interface {
 
 	// Run executes the upgrade business logic.
 	Run(ctx context.ProviderCallContext) error
+}
+
+// JujuUpgradePrechecker is an interface that can be used to precheck
+// the Environs before upgrading juju. If an Environ implements this
+// interface, its PrecheckUpgradeOperations method will be invoked to
+// identify operations that should be run to check if an juju upgrade
+// is possible.
+type JujuUpgradePrechecker interface {
+	// PreparePrechecker is called to to give an Environ a chance to
+	// perform interactive operations that are required for prechecking
+	// an upgrade.
+	PreparePrechecker() error
+
+	// PrecheckUpgradeOperations returns a list of
+	// PrecheckJujuUpgradeOperations for checking if juju can be upgrade.
+	PrecheckUpgradeOperations() []PrecheckJujuUpgradeOperation
+}
+
+// PrecheckJujuUpgradeOperation contains a target agent version and
+// sequence of upgrade precheck steps to apply to get to that version.
+type PrecheckJujuUpgradeOperation struct {
+	// TargetVersion is the target juju version.
+	TargetVersion version.Number
+
+	// Steps contains the sequence of upgrade steps to apply when
+	// upgrading to the accompanying target version number.
+	Steps []PrecheckJujuUpgradeStep
+}
+
+// PrecheckJujuUpgradeStep defines an idempotent operation that is run
+// a specific precheck upgrade step on an Environ.
+type PrecheckJujuUpgradeStep interface {
+	// Description is a human readable description of what the
+	// precheck upgrade step does.
+	Description() string
+
+	// Run executes the precheck upgrade business logic.
+	Run() error
 }
 
 // DefaultConstraintsChecker defines an interface for checking if the default

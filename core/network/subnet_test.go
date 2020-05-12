@@ -5,10 +5,11 @@ package network_test
 
 import (
 	"github.com/juju/errors"
-	"github.com/juju/juju/core/network"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
+
+	"github.com/juju/juju/core/network"
 )
 
 type subnetSuite struct {
@@ -174,4 +175,61 @@ func (*subnetSuite) TestSubnetInfosGetByUnderLayCIDR(c *gc.C) {
 	overlays, err = s.GetByUnderlayCIDR("30.30.30.0/24")
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(overlays, gc.HasLen, 0)
+}
+
+func (*subnetSuite) TestSubnetInfosGetByCIDR(c *gc.C) {
+	s := network.SubnetInfos{
+		{ID: "1", CIDR: "10.10.10.0/24", ProviderId: "1"},
+		{ID: "2", CIDR: "10.10.10.0/24", ProviderId: "2"},
+		{ID: "3", CIDR: "20.20.20.0/24"},
+	}
+
+	_, err := s.GetByCIDR("invalid")
+	c.Check(err, jc.Satisfies, errors.IsNotValid)
+
+	subs, err := s.GetByCIDR("30.30.30.0/24")
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(subs, gc.HasLen, 0)
+
+	subs, err = s.GetByCIDR("10.10.10.0/24")
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(subs, gc.DeepEquals, s[:2])
+}
+
+func (*subnetSuite) TestSubnetInfosGetByID(c *gc.C) {
+	s := network.SubnetInfos{
+		{ID: "1"},
+		{ID: "2"},
+		{ID: "3"},
+	}
+
+	c.Check(s.GetByID("1"), gc.NotNil)
+	c.Check(s.ContainsID("1"), jc.IsTrue)
+
+	c.Check(s.GetByID("9"), gc.IsNil)
+	c.Check(s.ContainsID("9"), jc.IsFalse)
+}
+
+func (*subnetSuite) TestSubnetInfosGetByAddress(c *gc.C) {
+	s := network.SubnetInfos{
+		{ID: "1", CIDR: "10.10.10.0/24", ProviderId: "1"},
+		{ID: "2", CIDR: "10.10.10.0/24", ProviderId: "2"},
+		{ID: "3", CIDR: "20.20.20.0/24"},
+	}
+
+	_, err := s.GetByAddress("invalid")
+	c.Check(err, jc.Satisfies, errors.IsNotValid)
+
+	subs, err := s.GetByAddress("10.10.10.5")
+	c.Assert(err, jc.ErrorIsNil)
+
+	// We need to check these explicitly, because the IPNets of the original
+	// members will now be populated, making them differ.
+	c.Assert(subs, gc.HasLen, 2)
+	c.Check(subs[0].ProviderId, gc.Equals, network.Id("1"))
+	c.Check(subs[1].ProviderId, gc.Equals, network.Id("2"))
+
+	subs, err = s.GetByAddress("30.30.30.5")
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(subs, gc.HasLen, 0)
 }

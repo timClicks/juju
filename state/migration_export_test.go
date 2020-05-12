@@ -10,17 +10,17 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/juju/description"
+	"github.com/juju/charm/v7"
+	charmresource "github.com/juju/charm/v7/resource"
+	"github.com/juju/description/v2"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	jc "github.com/juju/testing/checkers"
 	"github.com/juju/utils/arch"
 	"github.com/juju/version"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
-	charmresource "gopkg.in/juju/charm.v6/resource"
 	"gopkg.in/juju/environschema.v1"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/macaroon.v2"
 
 	apitesting "github.com/juju/juju/api/testing"
@@ -537,6 +537,7 @@ func (s *MigrationExportSuite) assertMigrateApplications(c *gc.C, st *state.Stat
 		c.Assert(exported.CloudService().ProviderId(), gc.Equals, "provider-id")
 		c.Assert(exported.DesiredScale(), gc.Equals, 3)
 		c.Assert(exported.Placement(), gc.Equals, "")
+		c.Assert(exported.HasResources(), jc.IsTrue)
 		addresses := exported.CloudService().Addresses()
 		addr := addresses[0]
 		c.Assert(addr.Value(), gc.Equals, "192.168.1.1")
@@ -870,30 +871,6 @@ func (s *MigrationExportSuite) assertMigrateUnits(c *gc.C, st *state.State) {
 		c.Assert(err, jc.ErrorIsNil)
 		c.Assert(exported.Tools().Version(), gc.Equals, tools.Version)
 	}
-}
-
-func (s *MigrationExportSuite) TestApplicationLeadershipLegacy(c *gc.C) {
-	err := s.State.UpdateControllerConfig(map[string]interface{}{
-		"features": []interface{}{feature.LegacyLeases},
-	}, nil)
-	c.Assert(err, jc.ErrorIsNil)
-	s.makeApplicationWithUnits(c, "mysql", 2)
-	s.makeUnitApplicationLeaderLegacy(c, "mysql/1", "mysql")
-
-	s.makeApplicationWithUnits(c, "wordpress", 4)
-	s.makeUnitApplicationLeaderLegacy(c, "wordpress/2", "wordpress")
-
-	model, err := s.State.Export()
-	c.Assert(err, jc.ErrorIsNil)
-
-	leaders := make(map[string]string)
-	for _, application := range model.Applications() {
-		leaders[application.Name()] = application.Leader()
-	}
-	c.Assert(leaders, jc.DeepEquals, map[string]string{
-		"mysql":     "mysql/1",
-		"wordpress": "wordpress/2",
-	})
 }
 
 func (s *MigrationExportSuite) TestApplicationLeadership(c *gc.C) {
@@ -1349,7 +1326,7 @@ func (s *MigrationExportSuite) TestIPAddresses(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	args := state.LinkLayerDeviceAddress{
 		DeviceName:       "foo",
-		ConfigMethod:     state.StaticAddress,
+		ConfigMethod:     network.StaticAddress,
 		CIDRAddress:      "0.1.2.3/24",
 		ProviderID:       "bar",
 		DNSServers:       []string{"bam", "mam"},
@@ -1368,7 +1345,7 @@ func (s *MigrationExportSuite) TestIPAddresses(c *gc.C) {
 	c.Assert(addr.Value(), gc.Equals, "0.1.2.3")
 	c.Assert(addr.MachineID(), gc.Equals, machine.Id())
 	c.Assert(addr.DeviceName(), gc.Equals, "foo")
-	c.Assert(addr.ConfigMethod(), gc.Equals, string(state.StaticAddress))
+	c.Assert(addr.ConfigMethod(), gc.Equals, string(network.StaticAddress))
 	c.Assert(addr.SubnetCIDR(), gc.Equals, "0.1.2.0/24")
 	c.Assert(addr.ProviderID(), gc.Equals, "bar")
 	c.Assert(addr.DNSServers(), jc.DeepEquals, []string{"bam", "mam"})
@@ -1390,7 +1367,7 @@ func (s *MigrationExportSuite) TestIPAddressesSkipped(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	args := state.LinkLayerDeviceAddress{
 		DeviceName:       "foo",
-		ConfigMethod:     state.StaticAddress,
+		ConfigMethod:     network.StaticAddress,
 		CIDRAddress:      "0.1.2.3/24",
 		ProviderID:       "bar",
 		DNSServers:       []string{"bam", "mam"},

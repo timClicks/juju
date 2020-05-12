@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time" // Only used for time types.
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
 	jc "github.com/juju/testing/checkers"
 	jujutxn "github.com/juju/txn"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/juju/charm.v6"
 	"gopkg.in/juju/environschema.v1"
 
 	"github.com/juju/juju/core/application"
@@ -2722,8 +2722,8 @@ func (s *UnitSuite) TestWatchMachineAndEndpointAddressesHash(c *gc.C) {
 	)
 	c.Assert(err, gc.IsNil)
 	err = m1.SetDevicesAddresses(
-		state.LinkLayerDeviceAddress{DeviceName: "enp5s0", CIDRAddress: "10.0.0.1/24", ConfigMethod: state.StaticAddress},
-		state.LinkLayerDeviceAddress{DeviceName: "enp5s1", CIDRAddress: "10.0.254.42/24", ConfigMethod: state.StaticAddress},
+		state.LinkLayerDeviceAddress{DeviceName: "enp5s0", CIDRAddress: "10.0.0.1/24", ConfigMethod: corenetwork.StaticAddress},
+		state.LinkLayerDeviceAddress{DeviceName: "enp5s1", CIDRAddress: "10.0.254.42/24", ConfigMethod: corenetwork.StaticAddress},
 	)
 	c.Assert(err, gc.IsNil)
 
@@ -2749,7 +2749,11 @@ func (s *UnitSuite) TestWatchMachineAndEndpointAddressesHash(c *gc.C) {
 	wc.AssertChange("b1b30f7f8b818a0ef59e858ab0e409a33ebe9eefead686f7a0f1d1ef7a11cf0e")
 
 	// Adding a new machine address should trigger a change
-	err = m1.SetDevicesAddresses(state.LinkLayerDeviceAddress{DeviceName: "enp5s0", CIDRAddress: "10.0.0.100/24", ConfigMethod: state.StaticAddress})
+	err = m1.SetDevicesAddresses(state.LinkLayerDeviceAddress{
+		DeviceName:   "enp5s0",
+		CIDRAddress:  "10.0.0.100/24",
+		ConfigMethod: corenetwork.StaticAddress,
+	})
 	c.Assert(err, gc.IsNil)
 	err = m1.SetProviderAddresses(corenetwork.NewSpaceAddress("10.0.0.100"))
 	c.Assert(err, gc.IsNil)
@@ -3125,6 +3129,14 @@ func (s *CAASUnitSuite) TestWatchServiceAddressesHash(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	err = s.application.Destroy()
 	c.Assert(err, jc.ErrorIsNil)
+
+	// App removal requires cluster resources to be cleared.
+	err = s.application.Refresh()
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.application.ClearResources()
+	c.Assert(err, jc.ErrorIsNil)
+	assertCleanupCount(c, s.Model.State(), 2)
+
 	s.State.StartSync()
 	select {
 	case _, ok := <-w.Changes():

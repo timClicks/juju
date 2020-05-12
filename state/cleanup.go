@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/errors"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
+	"github.com/juju/names/v4"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 
@@ -39,6 +39,7 @@ const (
 	cleanupForceRemoveUnit               cleanupKind = "forceRemoveUnit"
 	cleanupRemovedUnit                   cleanupKind = "removedUnit"
 	cleanupApplication                   cleanupKind = "application"
+	cleanupForceApplication              cleanupKind = "forceApplication"
 	cleanupApplicationsForDyingModel     cleanupKind = "applications"
 	cleanupDyingMachine                  cleanupKind = "dyingMachine"
 	cleanupForceDestroyedMachine         cleanupKind = "machine"
@@ -56,6 +57,7 @@ const (
 
 	cleanupResourceBlob          cleanupKind = "resourceBlob"
 	cleanupStorageForDyingModel  cleanupKind = "modelStorage"
+	cleanupForceStorage          cleanupKind = "forceStorage"
 	cleanupBranchesForDyingModel cleanupKind = "branches"
 )
 
@@ -162,6 +164,8 @@ func (st *State) Cleanup() (err error) {
 			err = st.cleanupCharm(doc.Prefix)
 		case cleanupApplication:
 			err = st.cleanupApplication(doc.Prefix, args)
+		case cleanupForceApplication:
+			err = st.cleanupForceApplication(doc.Prefix, args)
 		case cleanupUnitsForDyingApplication:
 			err = st.cleanupUnitsForDyingApplication(doc.Prefix, args)
 		case cleanupDyingUnit:
@@ -195,7 +199,9 @@ func (st *State) Cleanup() (err error) {
 		case cleanupResourceBlob:
 			err = st.cleanupResourceBlob(doc.Prefix)
 		case cleanupStorageForDyingModel:
-			err = st.cleanupStorageForDyingModel(args)
+			err = st.cleanupStorageForDyingModel(doc.Prefix, args)
+		case cleanupForceStorage:
+			err = st.cleanupForceStorage(args)
 		case cleanupBranchesForDyingModel:
 			err = st.cleanupBranchesForDyingModel(args)
 		default:
@@ -403,7 +409,12 @@ func (st *State) cleanupMachinesForDyingModel(cleanupArgs []bson.Raw) (err error
 			}
 			continue
 		}
-		if err := m.ForceDestroy(args.MaxWait); err != nil {
+		if force {
+			err = m.ForceDestroy(args.MaxWait)
+		} else {
+			err = m.Destroy()
+		}
+		if err != nil {
 			err = errors.Annotatef(err, "while destroying machine %v is", m.Id())
 			// TODO (force 2019-4-24) we should not break out here but continue with other machines.
 			if !force {
@@ -417,7 +428,7 @@ func (st *State) cleanupMachinesForDyingModel(cleanupArgs []bson.Raw) (err error
 
 // cleanupStorageForDyingModel sets all storage to Dying, if they are not
 // already Dying or Dead. It's expected to be used when a model is destroyed.
-func (st *State) cleanupStorageForDyingModel(cleanupArgs []bson.Raw) (err error) {
+func (st *State) cleanupStorageForDyingModel(modelUUID string, cleanupArgs []bson.Raw) (err error) {
 	sb, err := NewStorageBackend(st)
 	if err != nil {
 		return errors.Trace(err)
@@ -450,6 +461,45 @@ func (st *State) cleanupStorageForDyingModel(cleanupArgs []bson.Raw) (err error)
 		if errors.IsNotFound(err) {
 			continue
 		} else if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	if force {
+		st.scheduleForceCleanup(cleanupForceStorage, modelUUID, args.MaxWait)
+	}
+	return nil
+}
+
+// cleanupForceStorage forcibly removes any remaining storage records from a dying model.
+func (st *State) cleanupForceStorage(cleanupArgs []bson.Raw) (err error) {
+	sb, err := NewStorageBackend(st)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// There may be unattached filesystems left over that need to be deleted.
+	filesystems, err := sb.AllFilesystems()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	for _, fs := range filesystems {
+		if err := sb.DestroyFilesystem(fs.FilesystemTag(), true); err != nil {
+			return errors.Trace(err)
+		}
+		if err := sb.RemoveFilesystem(fs.FilesystemTag()); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	// There may be unattached volumes left over that need to be deleted.
+	volumes, err := sb.AllVolumes()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	for _, v := range volumes {
+		if err := sb.DestroyVolume(v.VolumeTag(), true); err != nil {
+			return errors.Trace(err)
+		}
+		if err := sb.RemoveVolume(v.VolumeTag()); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -504,6 +554,38 @@ func (st *State) cleanupApplication(applicationname string, cleanupArgs []bson.R
 	err = st.ApplyOperation(op)
 	if len(op.Errors) != 0 {
 		logger.Warningf("operational errors cleaning up application %v: %v", applicationname, op.Errors)
+	}
+	return err
+}
+
+// cleanupForceApplication forcibly removes the application.
+func (st *State) cleanupForceApplication(applicationName string, cleanupArgs []bson.Raw) (err error) {
+	logger.Debugf("force destroy application: %v", applicationName)
+	app, err := st.Application(applicationName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Nothing to do, the application is already gone.
+			logger.Tracef("forceCleanupApplication(%s): application already gone", applicationName)
+			return nil
+		}
+		return errors.Trace(err)
+	}
+
+	var maxWait time.Duration
+	if n := len(cleanupArgs); n != 1 {
+		return errors.Errorf("expected 1 argument, got %d", n)
+	}
+	if err := cleanupArgs[0].Unmarshal(&maxWait); err != nil {
+		return errors.Annotate(err, "unmarshalling cleanup arg 'maxWait'")
+	}
+
+	op := app.DestroyOperation()
+	op.Force = true
+	op.CleanupIgnoringResources = true
+	op.MaxWait = maxWait
+	err = st.ApplyOperation(op)
+	if len(op.Errors) != 0 {
+		logger.Warningf("operational errors cleaning up application %v: %v", applicationName, op.Errors)
 	}
 	return err
 }
@@ -1096,7 +1178,7 @@ func (st *State) cleanupDyingMachine(machineId string, cleanupArgs []bson.Raw) e
 	// machine if the provisioner has gone AWOL - the main case here
 	// is if the cloud credential is invalid so the provisioner is
 	// stopped.
-	if force {
+	if force && !machine.ForceDestroyed() {
 		st.scheduleForceCleanup(cleanupForceRemoveMachine, machineId, maxWait)
 	}
 	return nil
@@ -1127,6 +1209,14 @@ func (st *State) cleanupForceDestroyedMachineInternal(machineId string, maxWait 
 		return nil
 	} else if err != nil {
 		return errors.Trace(err)
+	}
+
+	// Schedule a forced cleanup if not already done.
+	if !machine.ForceDestroyed() {
+		st.scheduleForceCleanup(cleanupForceRemoveMachine, machineId, maxWait)
+		if err := st.db().RunTransaction(machine.forceDestroyedOps()); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	// The first thing we want to do is remove any series upgrade machine
@@ -1208,10 +1298,55 @@ func (st *State) cleanupForceDestroyedMachineInternal(machineId string, maxWait 
 // machine after a certain amount of time if it hasn't gone away
 // already.
 func (st *State) cleanupForceRemoveMachine(machineId string, cleanupArgs []bson.Raw) error {
+	var maxWait time.Duration
+	// It's valid to have no args: old cleanups have no args, so follow the old behaviour.
+	if n := len(cleanupArgs); n > 0 {
+		if n != 1 {
+			return errors.Errorf("expected 0-1 arguments, got %d", n)
+		}
+		if err := cleanupArgs[0].Unmarshal(&maxWait); err != nil {
+			return errors.Annotate(err, "unmarshalling cleanup arg 'maxWait'")
+		}
+	}
+	sb, err := NewStorageBackend(st)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// Remove any storage still attached to the machine.
+	tag := names.NewMachineTag(machineId)
+	machineVolumeAttachments, err := sb.MachineVolumeAttachments(tag)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	for _, va := range machineVolumeAttachments {
+		v, err := sb.Volume(va.Volume())
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := sb.RemoveVolumeAttachmentPlan(tag, va.Volume(), true); err != nil {
+			return errors.Trace(err)
+		}
+		if v.Detachable() {
+			if err := sb.DetachVolume(tag, va.Volume(), true); err != nil {
+				return errors.Trace(err)
+			}
+		}
+		if err := sb.RemoveVolumeAttachment(tag, va.Volume(), true); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	machine, err := st.Machine(machineId)
 	if errors.IsNotFound(err) {
 		return nil
 	} else if err != nil {
+		return errors.Trace(err)
+	}
+	if err := machine.advanceLifecycle(Dead, true, maxWait); err != nil {
 		return errors.Trace(err)
 	}
 	return machine.Remove()
@@ -1288,7 +1423,7 @@ func cleanupDyingEntityStorage(sb *storageBackend, hostTag names.Tag, manual boo
 		}
 	}
 	for _, f := range filesystems {
-		if err := sb.DestroyFilesystem(f.FilesystemTag()); err != nil && !errors.IsNotFound(err) {
+		if err := sb.DestroyFilesystem(f.FilesystemTag(), force); err != nil && !errors.IsNotFound(err) {
 			if !force {
 				return errors.Trace(err)
 			}
@@ -1347,14 +1482,14 @@ func cleanupDyingEntityStorage(sb *storageBackend, hostTag names.Tag, manual boo
 				}
 			}
 			if remove {
-				if err := sb.RemoveFilesystemAttachment(fsa.Host(), fsa.Filesystem()); err != nil && !errors.IsNotFound(err) {
+				if err := sb.RemoveFilesystemAttachment(fsa.Host(), fsa.Filesystem(), force); err != nil && !errors.IsNotFound(err) {
 					if !force {
 						return errors.Trace(err)
 					}
 					logger.Warningf("could not remove attachment for filesystem %v for %v: %v", fsa.Filesystem().Id(), hostTag, err)
 				}
 				if volumeTag != (names.VolumeTag{}) {
-					if err := sb.RemoveVolumeAttachmentPlan(machineTag, volumeTag); err != nil && !errors.IsNotFound(err) {
+					if err := sb.RemoveVolumeAttachmentPlan(machineTag, volumeTag, force); err != nil && !errors.IsNotFound(err) {
 						if !force {
 							return errors.Trace(err)
 						}
@@ -1400,7 +1535,7 @@ func cleanupDyingEntityStorage(sb *storageBackend, hostTag names.Tag, manual boo
 			// Non-detachable volumes will be removed along with the machine.
 			continue
 		}
-		if err := sb.DetachVolume(va.Host(), va.Volume()); err != nil && !errors.IsNotFound(err) {
+		if err := sb.DetachVolume(va.Host(), va.Volume(), force); err != nil && !errors.IsNotFound(err) {
 			if IsContainsFilesystem(err) {
 				// The volume will be destroyed when the
 				// contained filesystem is removed, whose
@@ -1551,7 +1686,7 @@ func (st *State) cleanupAttachmentsForDyingVolume(volumeId string) (err error) {
 	defer closeIter(iter, &err, "reading volume attachment document")
 	for iter.Next(&doc) {
 		hostTag := storageAttachmentHost(doc.Host)
-		if err := sb.DetachVolume(hostTag, volumeTag); err != nil {
+		if err := sb.DetachVolume(hostTag, volumeTag, false); err != nil {
 			return errors.Annotate(err, "destroying volume attachment")
 		}
 	}

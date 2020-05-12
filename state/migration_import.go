@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/juju/description"
+	"github.com/juju/charm/v7"
+	"github.com/juju/description/v2"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
+	"github.com/juju/names/v4"
 	"github.com/juju/version"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 
@@ -1247,6 +1247,7 @@ func (i *importer) makeApplicationDoc(a description.Application) (*applicationDo
 		MetricCredentials:    a.MetricsCredentials(),
 		DesiredScale:         a.DesiredScale(),
 		Placement:            a.Placement(),
+		HasResources:         a.HasResources(),
 	}, nil
 }
 
@@ -1814,7 +1815,7 @@ func (i *importer) addIPAddress(addr description.IPAddress) error {
 		DeviceName:       addr.DeviceName(),
 		MachineID:        addr.MachineID(),
 		SubnetCIDR:       subnetCIDR,
-		ConfigMethod:     AddressConfigMethod(addr.ConfigMethod()),
+		ConfigMethod:     network.AddressConfigMethod(addr.ConfigMethod()),
 		Value:            addressValue,
 		DNSServers:       addr.DNSServers(),
 		DNSSearchDomains: addr.DNSSearchDomains(),

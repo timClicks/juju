@@ -24,7 +24,7 @@ type Client interface {
 	ComputeResources(context.Context) ([]*mo.ComputeResource, error)
 	ResourcePools(context.Context, string) ([]*object.ResourcePool, error)
 	CreateVirtualMachine(context.Context, vsphereclient.CreateVirtualMachineParams) (*mo.VirtualMachine, error)
-	Datastores(context.Context) ([]*mo.Datastore, error)
+	Datastores(context.Context) ([]mo.Datastore, error)
 	DeleteDatastoreFile(context.Context, string) error
 	DestroyVMFolder(context.Context, string) error
 	EnsureVMFolder(context.Context, string, string) (*object.Folder, error)
@@ -37,7 +37,7 @@ type Client interface {
 	FindFolder(ctx context.Context, folderPath string) (vmFolder *object.Folder, err error)
 }
 
-//go:generate mockgen -package mocks -destination mocks/client_mock.go github.com/juju/juju/provider/vsphere Client
+//go:generate go run github.com/golang/mock/mockgen -package mocks -destination mocks/client_mock.go github.com/juju/juju/provider/vsphere Client
 func dialClient(
 	ctx context.Context,
 	cloudSpec environs.CloudSpec,

@@ -6,9 +6,9 @@ package caasunitprovisioner
 import (
 	"time"
 
+	"github.com/juju/charm/v7"
 	"github.com/juju/errors"
-	"gopkg.in/juju/charm.v6"
-	"gopkg.in/juju/names.v3"
+	"github.com/juju/names/v4"
 
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/application"
@@ -50,7 +50,7 @@ type StorageBackend interface {
 	// TODO(caas) - record unit id on the filesystem so we can query by unit
 	AllFilesystems() ([]state.Filesystem, error)
 	DestroyStorageInstance(tag names.StorageTag, destroyAttachments bool, force bool, maxWait time.Duration) (err error)
-	DestroyFilesystem(tag names.FilesystemTag) (err error)
+	DestroyFilesystem(tag names.FilesystemTag, force bool) (err error)
 }
 
 // DeviceBackend provides the subset of backend Device
@@ -90,6 +90,7 @@ type Application interface {
 	SetOperatorStatus(sInfo status.StatusInfo) error
 	SetStatus(statusInfo status.StatusInfo) error
 	Charm() (Charm, bool, error)
+	ClearResources() error
 }
 
 type stateShim struct {
