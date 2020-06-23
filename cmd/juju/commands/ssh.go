@@ -18,58 +18,149 @@ import (
 )
 
 var usageSSHSummary = `
-Initiates an SSH session or executes a command on a Juju machine.`[1:]
+Initiate a secure shell (SSH) session or execute a command on a Juju machine.`[1:]
 
 var usageSSHDetails = `
-The machine is identified by the <target> argument which is either a 'unit
-name' or a 'machine id'. Both are obtained in the output to "juju status". If
-'user' is specified then the connection is made to that user account;
-otherwise, the default 'ubuntu' account, created by Juju, is used.
+This command operates in two modes, like its namesake, the ssh command. It will
+either connect to a machine and establish an interactive secure shell (SSH) 
+session or execute a command on that machine and exit.
 
-The optional command is executed on the remote machine, and any output is sent
+Basic usage involves specifying a target to connect to and optionally a command
+to execute. 
+
+	juju ssh (<machine>|<unit>)
+	juju ssh (<machine>|<unit>) <command>
+
+'juju ssh' is very powerful,  but mistakes can disrupt the ability for Juju to
+operate in a fully automated manner in the future. Where possible, prefer pre-
+defined actions to avoid this problem. See the Further Reading section for 
+information about actions.
+
+When attempting to execute commands within a "unit context", e.g. to use hook 
+tools manually, prefer the 'juju exec' command.  
+
+
+Establishing a secure shell 
+
+
+Specify a target machine to connect to via its machine ID or its unit name.
+
+	juju ssh <target>
+
+<target> specifies where Juju should establish the connection. It takes 
+the form:
+
+    [<user>@](<machine>|<unit>)
+
+<user> is a user account that exists on the host machine. By default, Juju 
+uses the "ubuntu" user.
+
+<machine> is a machine ID. Currently accessible machine IDs are available
+via 'juju machines'.
+
+<unit> is a unit name. Currently accessible unit names are available via
+'juju status'. Unit names have the form:
+
+    <application>/<unit-id>
+
+<application> is the name of an application that has been added to the model.
+The list of applications is available via 'juju status'.
+
+<unit-id> is an integer. The list of units is available via 'juju status'.
+
+
+Executing a command
+
+The optional command is executed on the remote machine,  and any output is sent
 back to the user. If no command is specified, then an interactive shell session
 will be initiated.
 
-When "juju ssh" is executed without a terminal attached, e.g. when piping the
-output of another command into it, then the default behavior is to not allocate
-a pseudo-terminal (pty) for the ssh session; otherwise a pty is allocated. This
-behavior can be overridden by explicitly specifying the behavior with
-"--pty=true" or "--pty=false".
+	juju ssh <target> <command> [<command-argument> [...]]
+	
+<command> is the command to execute at <target>. Valid commands depend on the 
+host's operating system. 
 
-The SSH host keys of the target are verified. The --no-host-key-checks option
-can be used to disable these checks. Use of this option is not recommended as
-it opens up the possibility of a man-in-the-middle attack.
+<command-argument> is a command-line argument. Valid arguments are command-
+specific.
 
-The default identity known to Juju and used by this command is ~/.ssh/id_rsa
 
-Options can be passed to the local OpenSSH client (ssh) on platforms 
-where it is available. This is done by inserting them between the target and 
-a possible remote command. Refer to the ssh man page for an explanation 
-of those options.
+Advanced usage
+
+This section outlines options for changing the command's default behaviour.
+
+
+Advanced usage: pseudo-terminal behaviour
+
+When 'juju ssh' is executed without a terminal attached, such as when piping the
+output of another command into it, then the default behaviour is to not allocate
+a pseudo-terminal (PTY) for the SSH session. This behaviour can be overridden by 
+explicitly specifying the behaviour with '--pty=true' or '--pty=false' before 
+specifying <target>.
+
+    juju ssh --pty=(true|false) <target>
+
+
+Advanced usage: disable host key verification
+
+The SSH host keys of the target are verified to prevent man-in-the-middle (MITM)
+attacks. The '--no-host-key-checks' option can be used to disable these checks.
+Using this option is not recommended.
+
+    juju ssh --no-host-key-keys=true <target>
+
+
+Advanced usage: identity management
+
+By default, Juju will select a private key (also known as an identity file) to 
+connect with from the following locations:
+
+  - ~/.ssh/id_rsa 
+  - $XDG_DATA_HOME/juju/ssh/juju_id_rsa
+
+To override this default, add the '-i <path-to-private-key>' option *after* the 
+target machine.
+
+    juju ssh <target> -i <path-to-private-key>
+
+
+Advanced usage: providing options directly to ssh
+
+Options can be passed to the local OpenSSH client (ssh) on platforms where it 
+is available. Refer to your system's documentation for options supported by 
+your environment.
+
+    juju ssh <target> <ssh-option> [<ssh-option> [...]]
+
 
 Examples:
-Connect to machine 0:
 
+    # Connect to machine 0:
     juju ssh 0
-
-Connect to machine 1 and run command 'uname -a':
-
+	
+    # Connect to a mysql unit:
+	juju ssh mysql/0
+	
+    # Run command 'uname -a' on machine 1:
     juju ssh 1 uname -a
 
-Connect to a mysql unit:
-
-    juju ssh mysql/0
-
-Connect to a jenkins unit as user jenkins:
-
+	# Run command 'top' on the etcd/0 unit:
+	juju ssh etcd/0 top
+	
+	# Establish a secure shell on the machine hosting the jenkins/0
+	# unit as the "jenkins" user:
     juju ssh jenkins@jenkins/0
 
-Connect to a mysql unit with an identity not known to juju (ssh option -i):
-
-    juju ssh mysql/0 -i ~/.ssh/my_private_key echo hello
+	# Run the 'echo hello' command on the machine hosting the mysql/0 unit
+	# using a custom private key:
+	juju ssh mysql/0 -i ~/.ssh/id_alternate echo hello
+	
 
 See also: 
-    scp`
+
+	exec
+	run-action
+	scp
+`
 
 func newSSHCommand(
 	hostChecker jujussh.ReachableChecker,
@@ -90,13 +181,13 @@ type sshCommand struct {
 
 func (c *sshCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.SSHCommon.SetFlags(f)
-	f.Var(&c.pty, "pty", "Enable pseudo-tty allocation")
+	f.Var(&c.pty, "pty", "Enable pseudoterminal (pseudo-tty or PTY) allocation")
 }
 
 func (c *sshCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
 		Name:    "ssh",
-		Args:    "<[user@]target> [openssh options] [command]",
+		Args:    "[<user>@][<application>/]<machine> [<ssh-option> ...] [<command> [<command-option> ...]]",
 		Purpose: usageSSHSummary,
 		Doc:     usageSSHDetails,
 	})

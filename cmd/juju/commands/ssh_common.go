@@ -112,8 +112,8 @@ var sshHostFromTargetAttemptStrategy attemptStarter = attemptStrategy{
 
 func (c *SSHCommon) SetFlags(f *gnuflag.FlagSet) {
 	c.ModelCommandBase.SetFlags(f)
-	f.BoolVar(&c.proxy, "proxy", false, "Proxy through the API server")
-	f.BoolVar(&c.noHostKeyChecks, "no-host-key-checks", false, "Skip host key checking (INSECURE)")
+	f.BoolVar(&c.proxy, "proxy", false, "Proxy communication through the controller")
+	f.BoolVar(&c.noHostKeyChecks, "no-host-key-checks", false, "Skip host key verification (Warning: insecure)")
 }
 
 // defaultReachableChecker returns a jujussh.ReachableChecker with a connection
